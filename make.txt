@@ -1,0 +1,2 @@
+./configure --with-MPI --enable-gpu-aware-mpi --with-MPI-include=/usr/local/mpi/include --with-MPI-lib-dirs=/usr/local/mpi/lib --enable-cuda-streams --with-cuda-home=/opt/cuda --with-gpu-arch='70 86' --enable-unified-memory 
+--enable-debug
