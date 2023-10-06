@@ -1676,7 +1676,7 @@ hypre_CSRMatrixToParCSRMatrix( MPI_Comm         comm,
       A_i = hypre_CSRMatrixI(A);
       A_j = hypre_CSRMatrixJ(A);
    }
-   hypre_MPI_Bcast(global_data, 3, HYPRE_MPI_BIG_INT, 0, comm);
+   hypre_MPI_Bcast(global_data, 4, HYPRE_MPI_BIG_INT, 0, comm);
    global_num_rows = global_data[0];
    global_num_cols = global_data[1];
    global_size     = global_data[2];
@@ -1973,7 +1973,7 @@ GenerateDiagAndOffd(hypre_CSRMatrix    *A,
          diag_data[i] = a_data[i];
          diag_j[i] = a_j[i];
       }
-      offd_i = hypre_CTAlloc(HYPRE_Int,  num_rows + 1, HYPRE_MEMORY_HOST);
+      offd_i = hypre_CTAlloc(HYPRE_Int,  num_rows + 1, memory_location);
 
       for (i = 0; i < num_rows + 1; i++)
       {
