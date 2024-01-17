@@ -20,9 +20,9 @@ extern "C" {
  *
  * SPDX-License-Identifier: (Apache-2.0 OR MIT)
  ******************************************************************************/
-#ifndef OLD_CUDA
+/*#ifndef OLD_CUDA
 #define OLD_CUDA //used for old architecture with sm<6.0
-#endif
+#endif*/
 
 
 #ifndef hypre_STATE_HEADER
