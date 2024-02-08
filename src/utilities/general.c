@@ -281,6 +281,13 @@ HYPRE_Initialize(void)
       hypre_SetDevice(device_id, _hypre_handle);
       hypre_GetDeviceMaxShmemSize(device_id, _hypre_handle);
 
+#if defined(HYPRE_USING_CUDA)
+      cudaDeviceProp device_prop;
+      HYPRE_CUDA_CALL( cudaGetDeviceProperties(&device_prop, device_id) );
+      printf("sm is %d.%d\n", device_prop.major, device_prop.minor);
+      _hypre_handle->device_data->has_concurrent_managed_access = device_prop.concurrentManagedAccess;
+#endif
+
 #if defined(HYPRE_USING_DEVICE_MALLOC_ASYNC)
       cudaMemPool_t mempool;
       cudaDeviceGetDefaultMemPool(&mempool, device_id);

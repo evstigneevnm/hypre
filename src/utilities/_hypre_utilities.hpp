@@ -727,6 +727,9 @@ struct hypre_DeviceData
    HYPRE_Int                         spgemm_use_vendor;
    /* PMIS RNG */
    HYPRE_Int                         use_gpu_rand;
+#if defined(HYPRE_USING_CUDA)
+   HYPRE_Int                         has_concurrent_managed_access;
+#endif
 };
 
 #define hypre_DeviceDataCubBinGrowth(data)                   ((data) -> cub_bin_growth)
