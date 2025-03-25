@@ -7,4 +7,4 @@ make -j
 
 OR
 
-./build.sh /usr/local/mpi /opt/cuda '70 86' double
+./build.sh /usr/local/mpi /opt/cuda '70 86' double debug
