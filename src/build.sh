@@ -15,8 +15,9 @@ then
     HYPRE_DEBUG_FLAG=--enable-debug
 fi
 make clean
-./configure --with-MPI --with-openmp --enable-gpu-aware-mpi --with-MPI-include=$MPI_ROOT_PATH/include --with-MPI-lib-dirs=$MPI_ROOT_PATH/lib --enable-cuda-streams --with-cuda-home=$CUDA_ROOT_PATH --with-gpu-arch="$CUDA_ARCH_LIST" --enable-unified-memory $HYPRE_PRECISION_FLAG $HYPRE_DEBUG_FLAG
+./configure --with-MPI --with-openmp --enable-gpu-aware-mpi --enable-mixedint --with-MPI-include=$MPI_ROOT_PATH/include --with-MPI-lib-dirs=$MPI_ROOT_PATH/lib --enable-cuda-streams --with-cuda-home=$CUDA_ROOT_PATH --with-gpu-arch="$CUDA_ARCH_LIST" --enable-unified-memory $HYPRE_PRECISION_FLAG $HYPRE_DEBUG_FLAG
 make -j
 cd test
 make ij -j
+./ij
 cd ..
