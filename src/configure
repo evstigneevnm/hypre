@@ -10897,7 +10897,7 @@ printf "%s\n" "#define HYPRE_USING_HIP 1" >>confdefs.h
            HYPRE_CUDA_GENCODE="`echo ${HYPRE_CUDA_GENCODE}|sed 's/,$//'`"
         fi
 
-                                        HIPCXXFLAGS="-x hip -std=c++14 ${HIPCXXFLAGS}"
+                                        HIPCXXFLAGS="-x hip -std=c++14 -fPIC ${HIPCXXFLAGS}"
 
                                 if test x"$hypre_using_debug" == x"yes"
 then :

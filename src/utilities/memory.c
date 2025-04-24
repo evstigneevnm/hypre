@@ -1149,11 +1149,11 @@ hypre_GetPointerLocation(const void *ptr, hypre_MemoryLocation *memory_location)
    {
       *memory_location = hypre_MEMORY_UNIFIED;
    }
-   else if (attr.memoryType == hipMemoryTypeDevice)
+   else if (attr.type == hipMemoryTypeDevice)
    {
       *memory_location = hypre_MEMORY_DEVICE;
    }
-   else if (attr.memoryType == hipMemoryTypeHost)
+   else if (attr.type == hipMemoryTypeHost)
    {
       *memory_location = hypre_MEMORY_HOST_PINNED;
    }
