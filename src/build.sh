@@ -55,10 +55,15 @@ then
     echo $HYPRE_ENABLE_GPU_AWARE_MPI
 fi
 
-make clean
+make clean || echo "Warning: make clean failed; continuing with a fresh configure"
 ./configure --with-MPI --enable-mixedint --with-MPI-include=$MPI_ROOT_PATH/include --with-MPI-lib-dirs=$MPI_ROOT_PATH/lib --enable-cuda-streams --with-cuda-home=$CUDA_ROOT_PATH --with-gpu-arch="$CUDA_ARCH_LIST" --enable-unified-memory $HYPRE_PRECISION_FLAG $HYPRE_DEBUG_FLAG --with-openmp $HYPRE_ENABLE_GPU_AWARE_MPI 
 make -j
-cd test
-make ij -j
-./ij
-cd ..
+if [[ "${STOKES_HYPRE_RUN_TEST:-1}" != "0" ]]
+then
+    cd test
+    make ij -j
+    ./ij
+    cd ..
+else
+    echo "Skipping hypre CUDA runtime test because STOKES_HYPRE_RUN_TEST=0"
+fi
