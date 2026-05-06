@@ -7,6 +7,7 @@ CUDA_ARCH_LIST=$3
 HYPRE_ENABLE_GPU_AWARE_MPI=--enable-gpu-aware-mpi 
 HYPRE_PRECISION_FLAG=""
 HYPRE_DEBUG_FLAG=""
+HYPRE_DEVICE_MODE=${7:-cuda}
 
 if [[ "${STOKES_USE_CALLER_TOOLCHAIN:-0}" != "1" ]]
 then
@@ -55,8 +56,21 @@ then
     echo $HYPRE_ENABLE_GPU_AWARE_MPI
 fi
 
+HYPRE_DEVICE_CONFIG=()
+if [[ "$HYPRE_DEVICE_MODE" == "cuda" ]]
+then
+    HYPRE_DEVICE_CONFIG=(--enable-cuda-streams "--with-cuda-home=$CUDA_ROOT_PATH" "--with-gpu-arch=$CUDA_ARCH_LIST" --enable-unified-memory)
+elif [[ "$HYPRE_DEVICE_MODE" == "host" || "$HYPRE_DEVICE_MODE" == "cpu" ]]
+then
+    echo "Building CPU/OpenMP HYPRE without CUDA device backend"
+    HYPRE_ENABLE_GPU_AWARE_MPI=""
+else
+    echo "Unknown HYPRE device mode: $HYPRE_DEVICE_MODE" >&2
+    exit 2
+fi
+
 make clean || echo "Warning: make clean failed; continuing with a fresh configure"
-./configure --with-MPI --enable-mixedint --with-MPI-include=$MPI_ROOT_PATH/include --with-MPI-lib-dirs=$MPI_ROOT_PATH/lib --enable-cuda-streams --with-cuda-home=$CUDA_ROOT_PATH --with-gpu-arch="$CUDA_ARCH_LIST" --enable-unified-memory $HYPRE_PRECISION_FLAG $HYPRE_DEBUG_FLAG --with-openmp $HYPRE_ENABLE_GPU_AWARE_MPI 
+./configure --with-MPI --enable-mixedint "--with-MPI-include=$MPI_ROOT_PATH/include" "--with-MPI-lib-dirs=$MPI_ROOT_PATH/lib" "${HYPRE_DEVICE_CONFIG[@]}" $HYPRE_PRECISION_FLAG $HYPRE_DEBUG_FLAG --with-openmp $HYPRE_ENABLE_GPU_AWARE_MPI 
 make -j
 if [[ "${STOKES_HYPRE_RUN_TEST:-1}" != "0" ]]
 then
@@ -65,5 +79,5 @@ then
     ./ij
     cd ..
 else
-    echo "Skipping hypre CUDA runtime test because STOKES_HYPRE_RUN_TEST=0"
+    echo "Skipping hypre runtime test because STOKES_HYPRE_RUN_TEST=0"
 fi
