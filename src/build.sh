@@ -8,6 +8,8 @@ HYPRE_ENABLE_GPU_AWARE_MPI=--enable-gpu-aware-mpi
 HYPRE_PRECISION_FLAG=""
 HYPRE_DEBUG_FLAG=""
 HYPRE_DEVICE_MODE=${7:-cuda}
+HYPRE_INT_MODE=${8:-}
+HYPRE_INT_FLAG=""
 
 if [[ "${STOKES_USE_CALLER_TOOLCHAIN:-0}" != "1" ]]
 then
@@ -60,17 +62,32 @@ HYPRE_DEVICE_CONFIG=()
 if [[ "$HYPRE_DEVICE_MODE" == "cuda" ]]
 then
     HYPRE_DEVICE_CONFIG=(--enable-cuda-streams "--with-cuda-home=$CUDA_ROOT_PATH" "--with-gpu-arch=$CUDA_ARCH_LIST" --enable-unified-memory)
+    HYPRE_INT_MODE=${HYPRE_INT_MODE:-mixedint}
 elif [[ "$HYPRE_DEVICE_MODE" == "host" || "$HYPRE_DEVICE_MODE" == "cpu" ]]
 then
     echo "Building CPU/OpenMP HYPRE without CUDA device backend"
     HYPRE_ENABLE_GPU_AWARE_MPI=""
+    HYPRE_INT_MODE=${HYPRE_INT_MODE:-bigint}
 else
     echo "Unknown HYPRE device mode: $HYPRE_DEVICE_MODE" >&2
     exit 2
 fi
 
+if [[ "$HYPRE_INT_MODE" == "mixedint" ]]
+then
+    echo "Using HYPRE mixed int mode: HYPRE_Int=int, HYPRE_BigInt=long long"
+    HYPRE_INT_FLAG=--enable-mixedint
+elif [[ "$HYPRE_INT_MODE" == "bigint" ]]
+then
+    echo "Using HYPRE big int mode: HYPRE_Int=long long, HYPRE_BigInt=long long"
+    HYPRE_INT_FLAG=--enable-bigint
+else
+    echo "Unknown HYPRE int mode: $HYPRE_INT_MODE" >&2
+    exit 2
+fi
+
 make clean || echo "Warning: make clean failed; continuing with a fresh configure"
-./configure --with-MPI --enable-mixedint "--with-MPI-include=$MPI_ROOT_PATH/include" "--with-MPI-lib-dirs=$MPI_ROOT_PATH/lib" "${HYPRE_DEVICE_CONFIG[@]}" $HYPRE_PRECISION_FLAG $HYPRE_DEBUG_FLAG --with-openmp $HYPRE_ENABLE_GPU_AWARE_MPI 
+./configure --with-MPI "$HYPRE_INT_FLAG" "--with-MPI-include=$MPI_ROOT_PATH/include" "--with-MPI-lib-dirs=$MPI_ROOT_PATH/lib" "${HYPRE_DEVICE_CONFIG[@]}" $HYPRE_PRECISION_FLAG $HYPRE_DEBUG_FLAG --with-openmp $HYPRE_ENABLE_GPU_AWARE_MPI 
 make -j
 if [[ "${STOKES_HYPRE_RUN_TEST:-1}" != "0" ]]
 then
