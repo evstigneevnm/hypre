@@ -368,6 +368,7 @@ hypre_CSRMatrixAddHost ( HYPRE_Complex    alpha,
    HYPRE_Int         nnzrows_C;
 
    HYPRE_Int        *twspace;
+   HYPRE_Int         num_add_threads;
 
    HYPRE_MemoryLocation memory_location_A = hypre_CSRMatrixMemoryLocation(A);
    HYPRE_MemoryLocation memory_location_B = hypre_CSRMatrixMemoryLocation(B);
@@ -389,7 +390,6 @@ hypre_CSRMatrixAddHost ( HYPRE_Complex    alpha,
    }
 
    /* Allocate memory */
-   twspace = hypre_TAlloc(HYPRE_Int, hypre_NumThreads(), HYPRE_MEMORY_HOST);
    C_i = hypre_CTAlloc(HYPRE_Int, nrows_A + 1, memory_location_C);
 
    /* Set nonzero rows data of diag_C */
@@ -416,8 +416,22 @@ hypre_CSRMatrixAddHost ( HYPRE_Complex    alpha,
       rownnz_C = NULL;
    }
 
+   if (nnzrows_C == 0)
+   {
+      C = hypre_CSRMatrixCreate(nrows_A, ncols_A, 0);
+      hypre_CSRMatrixI(C) = C_i;
+      hypre_CSRMatrixRownnz(C) = rownnz_C;
+      hypre_CSRMatrixNumRownnz(C) = nnzrows_C;
+      hypre_CSRMatrixInitialize_v2(C, 0, memory_location_C);
+
+      return C;
+   }
+
+   num_add_threads = hypre_min(hypre_NumThreads(), nnzrows_C);
+   twspace = hypre_TAlloc(HYPRE_Int, num_add_threads, HYPRE_MEMORY_HOST);
+
 #ifdef HYPRE_USING_OPENMP
-   #pragma omp parallel
+   #pragma omp parallel num_threads(num_add_threads)
 #endif
    {
       HYPRE_Int   ns, ne;

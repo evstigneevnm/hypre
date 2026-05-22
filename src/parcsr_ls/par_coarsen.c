@@ -14,6 +14,36 @@
 
 #include "_hypre_parcsr_ls.h"
 
+static HYPRE_Int
+hypre_BoomerAMGSetupDebugLevel( void )
+{
+   const char *env = getenv("HYPRE_BAMG_SETUP_DEBUG");
+
+   if (!env || !env[0])
+   {
+      return 0;
+   }
+
+   return hypre_max(atoi(env), 0);
+}
+
+static HYPRE_Int
+hypre_BoomerAMGSetupDebugShouldPrint( HYPRE_Int debug_level,
+                                      HYPRE_Int my_id )
+{
+   return (debug_level > 1) || (debug_level == 1 && my_id == 0);
+}
+
+static void
+hypre_BoomerAMGCoarsenDebugPrint( HYPRE_Int my_id,
+                                  const char *message,
+                                  HYPRE_Real elapsed )
+{
+   hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] coarsen %s: %.6f s\n",
+                my_id, message, elapsed);
+   fflush(NULL);
+}
+
 /*==========================================================================*/
 /*==========================================================================*/
 /**
@@ -980,6 +1010,10 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
    HYPRE_Int        break_var = 0;
    HYPRE_Int        f_pnt = F_PT;
    HYPRE_Real       wall_time;
+   HYPRE_Int        setup_debug_level = 0;
+   HYPRE_Int        setup_debug_print = 0;
+   HYPRE_Real       setup_debug_start_time = 0.0;
+   HYPRE_Real       setup_debug_phase_time = 0.0;
 
    if (coarsen_type < 0)
    {
@@ -1030,6 +1064,12 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
    col_n = col_0 + (HYPRE_BigInt)num_variables;
    hypre_MPI_Comm_size(comm, &num_procs);
    hypre_MPI_Comm_rank(comm, &my_id);
+   setup_debug_level = hypre_BoomerAMGSetupDebugLevel();
+   setup_debug_print = hypre_BoomerAMGSetupDebugShouldPrint(setup_debug_level, my_id);
+   if (setup_debug_print)
+   {
+      setup_debug_start_time = time_getWallclockSeconds();
+   }
 
    if (!comm_pkg)
    {
@@ -1048,6 +1088,18 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
    if (num_cols_offd)
    {
       S_offd_j = hypre_CSRMatrixJ(S_offd);
+   }
+
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RugeHost enter: rows=%d diag_nnz=%d offd_nnz=%d offd_cols=%d sends=%d coarsen_type=%d measure_type=%d cut_factor=%d threads=%d\n",
+                   my_id, num_variables, hypre_CSRMatrixNumNonzeros(S_diag),
+                   hypre_CSRMatrixNumNonzeros(S_offd), num_cols_offd, num_sends,
+                   coarsen_type, measure_type, cut_factor, hypre_NumThreads());
+      fflush(NULL);
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RugeHost transpose begin\n", my_id);
+      fflush(NULL);
    }
 
    jS = S_i[num_variables];
@@ -1090,6 +1142,15 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
    }
    ST_i[0] = 0;
 
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "RugeHost transpose done",
+                                       time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RugeHost measure begin\n", my_id);
+      fflush(NULL);
+   }
+
    /*----------------------------------------------------------
     * Compute the measures
     *
@@ -1107,6 +1168,13 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
       measure_array[i] = ST_i[i + 1] - ST_i[i];
    }
 
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "RugeHost local measure done",
+                                       time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+   }
+
    /* special case for Falgout coarsening */
    if (coarsen_type == 6)
    {
@@ -1121,6 +1189,13 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
 
    if ((meas_type || (coarsen_type != 1 && coarsen_type != 11)) && num_procs > 1)
    {
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RugeHost external strength extract begin\n",
+                      my_id);
+         fflush(NULL);
+      }
+
       if (use_commpkg_A)
       {
          S_ext      = hypre_ParCSRMatrixExtractBExt(S, A, 0);
@@ -1146,6 +1221,15 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
             }
          }
       }
+
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RugeHost external strength extract done: ext_rows=%d ext_nnz=%d %.6f s\n",
+                      my_id, num_cols_offd, S_ext_i ? S_ext_i[num_cols_offd] : 0,
+                      time_getWallclockSeconds() - setup_debug_phase_time);
+         fflush(NULL);
+         setup_debug_phase_time = time_getWallclockSeconds();
+      }
    }
 
    /*---------------------------------------------------
@@ -1155,6 +1239,12 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
    if (debug_flag == 3) { wall_time = time_getWallclockSeconds(); }
 
    /* first coarsening phase */
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RugeHost first pass begin\n", my_id);
+      fflush(NULL);
+      setup_debug_phase_time = time_getWallclockSeconds();
+   }
 
    /*************************************************************
     *
@@ -1262,6 +1352,14 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
       }
    }
 
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RugeHost list initialization done: num_left=%d %.6f s\n",
+                   my_id, num_left, time_getWallclockSeconds() - setup_debug_phase_time);
+      fflush(NULL);
+      setup_debug_phase_time = time_getWallclockSeconds();
+   }
+
    /****************************************************************
     *
     *  Main loop of Ruge-Stueben first coloring pass.
@@ -1362,6 +1460,12 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
       }
    }
 
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "RugeHost first coloring loop done",
+                                       time_getWallclockSeconds() - setup_debug_phase_time);
+   }
+
    hypre_TFree(measure_array, HYPRE_MEMORY_HOST);
    hypre_CSRMatrixDestroy(ST);
 
@@ -1387,6 +1491,13 @@ hypre_BoomerAMGCoarsenRuge( hypre_ParCSRMatrix    *S,
 
    if (coarsen_type == 11)
    {
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RugeHost done after first pass: total=%.6f s\n",
+                      my_id, time_getWallclockSeconds() - setup_debug_start_time);
+         fflush(NULL);
+      }
+
       if (meas_type && num_procs > 1)
       {
          hypre_CSRMatrixDestroy(S_ext);
@@ -2149,6 +2260,11 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
    HYPRE_Int                 iter = 0;
 
    HYPRE_Int                *prefix_sum_workspace;
+   HYPRE_Int                 setup_debug_level = 0;
+   HYPRE_Int                 setup_debug_print = 0;
+   HYPRE_Int                 setup_debug_iter_print = 0;
+   HYPRE_Real                setup_debug_start_time = 0.0;
+   HYPRE_Real                setup_debug_phase_time = 0.0;
 
 #if 0 /* debugging */
    char  filename[256];
@@ -2186,6 +2302,12 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
 
    hypre_MPI_Comm_size(comm, &num_procs);
    hypre_MPI_Comm_rank(comm, &my_id);
+   setup_debug_level = hypre_BoomerAMGSetupDebugLevel();
+   setup_debug_print = hypre_BoomerAMGSetupDebugShouldPrint(setup_debug_level, my_id);
+   if (setup_debug_print)
+   {
+      setup_debug_start_time = time_getWallclockSeconds();
+   }
 
    if (!comm_pkg)
    {
@@ -2214,6 +2336,16 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
       S_offd_j = hypre_CSRMatrixJ(S_offd);
    }
 
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost enter: rows=%d diag_nnz=%d offd_nnz=%d offd_cols=%d sends=%d send_map=%d CF_init=%d threads=%d\n",
+                   my_id, num_variables, hypre_CSRMatrixNumNonzeros(S_diag),
+                   hypre_CSRMatrixNumNonzeros(S_offd), num_cols_offd, num_sends,
+                   hypre_ParCSRCommPkgSendMapStart(comm_pkg, num_sends), CF_init,
+                   hypre_NumThreads());
+      fflush(NULL);
+   }
+
    /*----------------------------------------------------------
     * Compute the measures
     *
@@ -2224,6 +2356,13 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
     * The measures are augmented by a random number
     * between 0 and 1.
     *----------------------------------------------------------*/
+
+   if (setup_debug_print)
+   {
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost measures begin\n", my_id);
+      fflush(NULL);
+   }
 
    measure_array = hypre_CTAlloc(HYPRE_Real, num_variables + num_cols_offd, HYPRE_MEMORY_HOST);
 
@@ -2251,9 +2390,21 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
    }
 #endif // HYPRE_USING_OPENMP
 
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost offd measures done",
+                                       time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+   }
+
    /* now send those locally calculated values for the external nodes to the neighboring processors */
    if (num_procs > 1)
    {
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost measure exchange post begin\n", my_id);
+         fflush(NULL);
+      }
       comm_handle = hypre_ParCSRCommHandleCreate(2, comm_pkg, &measure_array[num_variables], buf_data);
    }
 
@@ -2280,10 +2431,23 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
    }
 #endif // HYPRE_USING_OPENMP
 
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost diag measures done",
+                                       time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+   }
+
    /* finish the communication */
    if (num_procs > 1)
    {
       hypre_ParCSRCommHandleDestroy(comm_handle);
+      if (setup_debug_print)
+      {
+         hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost measure exchange done",
+                                          time_getWallclockSeconds() - setup_debug_phase_time);
+         setup_debug_phase_time = time_getWallclockSeconds();
+      }
    }
 
    /* now add the externally calculated part of the local nodes to the local nodes */
@@ -2303,6 +2467,13 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
       measure_array[i] = 0;
    }
 
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost measure accumulation done",
+                                       time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+   }
+
    /* this augments the measures with a random number between 0 and 1 */
    /* (only for the local part) */
    /* this augments the measures */
@@ -2313,6 +2484,13 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
    else
    {
       hypre_BoomerAMGIndepSetInit(S, measure_array, 0);
+   }
+
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost measure randomization done",
+                                       time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
    }
 
    /*---------------------------------------------------
@@ -2421,6 +2599,14 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
       CF_marker_offd[i] = 0;
    }
 
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost graph init done: graph_size=%d graph_offd_size=%d\n",
+                   my_id, graph_size, graph_offd_size);
+      fflush(NULL);
+      setup_debug_phase_time = time_getWallclockSeconds();
+   }
+
    /*------------------------------------------------
     * Communicate the local measures, which are complete,
     to the external nodes
@@ -2438,8 +2624,18 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
 
    if (num_procs > 1)
    {
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost initial measure sync begin\n", my_id);
+         fflush(NULL);
+      }
       comm_handle = hypre_ParCSRCommHandleCreate(1, comm_pkg, buf_data, &measure_array[num_variables]);
       hypre_ParCSRCommHandleDestroy(comm_handle);
+      if (setup_debug_print)
+      {
+         hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost initial measure sync done",
+                                          time_getWallclockSeconds() - setup_debug_phase_time);
+      }
    }
 
    if (debug_flag == 3)
@@ -2454,6 +2650,12 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
    if (num_cols_offd)
    {
       graph_array_offd2 = hypre_CTAlloc(HYPRE_Int,  num_cols_offd, HYPRE_MEMORY_HOST);
+   }
+
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost initialization done",
+                                       time_getWallclockSeconds() - setup_debug_start_time);
    }
 
    /*******************************************************************************
@@ -2472,8 +2674,44 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
 
       /* if (my_id == 0) { hypre_printf("graph size %b\n", global_graph_size); } */
 
+      setup_debug_iter_print = setup_debug_print &&
+                               (setup_debug_level > 2 || iter < 20 || (iter % 10) == 0);
+      if (setup_debug_iter_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d begin: graph_size=%d graph_offd_size=%d global_graph_size=%b\n",
+                      my_id, iter, graph_size, graph_offd_size, global_graph_size);
+         fflush(NULL);
+      }
+
       if (global_graph_size == 0)
       {
+         break;
+      }
+
+      /* PMIS can leave a final singleton undecided on the host path when its
+       * measure is exactly one: it is neither selected as a C point
+       * (measure > 1) nor removed as an F point (measure < 1).  A singleton is
+       * a valid maximal independent-set coarse point, so finalize it directly
+       * instead of looping forever.
+       */
+      if (global_graph_size == 1)
+      {
+         for (ig = 0; ig < graph_size; ig++)
+         {
+            i = graph_array[ig];
+            CF_marker[i] = C_PT;
+            measure_array[i] = 0;
+         }
+
+         if (setup_debug_iter_print)
+         {
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d finalized singleton graph vertex as C point: local_graph_size=%d local_graph_offd_size=%d\n",
+                         my_id, iter, graph_size, graph_offd_size);
+            fflush(NULL);
+         }
+
+         graph_size = 0;
+         graph_offd_size = 0;
          break;
       }
 
@@ -2490,6 +2728,14 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
        *----------------------------------------------------------------------------------------*/
       if (!CF_init || iter)
       {
+         if (setup_debug_iter_print)
+         {
+            setup_debug_phase_time = time_getWallclockSeconds();
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d independent-set candidates begin\n",
+                         my_id, iter);
+            fflush(NULL);
+         }
+
          /*
             hypre_BoomerAMGIndepSet(S, measure_array, graph_array, graph_size,
             graph_array_offd, graph_offd_size, CF_marker, CF_marker_offd);
@@ -2517,6 +2763,16 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
             {
                CF_marker_offd[i] = 1;
             }
+         }
+
+         if (setup_debug_iter_print)
+         {
+            hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost independent-set candidates done",
+                                             time_getWallclockSeconds() - setup_debug_phase_time);
+            setup_debug_phase_time = time_getWallclockSeconds();
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d independent-set conflict removal begin\n",
+                         my_id, iter);
+            fflush(NULL);
          }
 
          /*-------------------------------------------------------
@@ -2568,13 +2824,32 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
             } /* for each node with measure > 1 */
          } /* for each node i */
 
+         if (setup_debug_iter_print)
+         {
+            hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost independent-set conflict removal done",
+                                             time_getWallclockSeconds() - setup_debug_phase_time);
+            setup_debug_phase_time = time_getWallclockSeconds();
+         }
+
          /*------------------------------------------------------------------------------
           * Exchange boundary data for CF_marker: send external CF to internal CF
           *------------------------------------------------------------------------------*/
          if (num_procs > 1)
          {
+            if (setup_debug_iter_print)
+            {
+               hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d external-to-local CF exchange begin\n",
+                            my_id, iter);
+               fflush(NULL);
+            }
             comm_handle = hypre_ParCSRCommHandleCreate(12, comm_pkg, CF_marker_offd, int_buf_data);
             hypre_ParCSRCommHandleDestroy(comm_handle);
+            if (setup_debug_iter_print)
+            {
+               hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost external-to-local CF exchange done",
+                                                time_getWallclockSeconds() - setup_debug_phase_time);
+               setup_debug_phase_time = time_getWallclockSeconds();
+            }
          }
 
          index = 0;
@@ -2596,10 +2871,28 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
             }
          }
 
+         if (setup_debug_iter_print)
+         {
+            hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost local boundary filter done",
+                                             time_getWallclockSeconds() - setup_debug_phase_time);
+            setup_debug_phase_time = time_getWallclockSeconds();
+         }
+
          if (num_procs > 1)
          {
+            if (setup_debug_iter_print)
+            {
+               hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d local-to-external CF exchange begin\n",
+                            my_id, iter);
+               fflush(NULL);
+            }
             comm_handle = hypre_ParCSRCommHandleCreate(11, comm_pkg, int_buf_data, CF_marker_offd);
             hypre_ParCSRCommHandleDestroy(comm_handle);
+            if (setup_debug_iter_print)
+            {
+               hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost local-to-external CF exchange done",
+                                                time_getWallclockSeconds() - setup_debug_phase_time);
+            }
          }
       } /* if (!CF_init || iter) */
 
@@ -2608,6 +2901,14 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
       /*------------------------------------------------
        * Set C-pts and F-pts.
        *------------------------------------------------*/
+      if (setup_debug_iter_print)
+      {
+         setup_debug_phase_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d set C/F begin\n",
+                      my_id, iter - 1);
+         fflush(NULL);
+      }
+
 #ifdef HYPRE_USING_OPENMP
       #pragma omp parallel for private(ig, i, jS, j) HYPRE_SMP_SCHEDULE
 #endif
@@ -2665,6 +2966,13 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
          } /* end else */
       } /* end first loop over graph */
 
+      if (setup_debug_iter_print)
+      {
+         hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost set C/F done",
+                                          time_getWallclockSeconds() - setup_debug_phase_time);
+         setup_debug_phase_time = time_getWallclockSeconds();
+      }
+
       /* now communicate CF_marker to CF_marker_offd, to make
          sure that new external F points are known on this processor */
 
@@ -2683,13 +2991,32 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
 
       if (num_procs > 1)
       {
+         if (setup_debug_iter_print)
+         {
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d CF sync begin\n",
+                         my_id, iter - 1);
+            fflush(NULL);
+         }
          comm_handle = hypre_ParCSRCommHandleCreate(11, comm_pkg, int_buf_data, CF_marker_offd);
          hypre_ParCSRCommHandleDestroy(comm_handle);
+         if (setup_debug_iter_print)
+         {
+            hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost CF sync done",
+                                             time_getWallclockSeconds() - setup_debug_phase_time);
+         }
       }
 
       /*------------------------------------------------
        * Update subgraph
        *------------------------------------------------*/
+
+      if (setup_debug_iter_print)
+      {
+         setup_debug_phase_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d graph update begin\n",
+                      my_id, iter - 1);
+         fflush(NULL);
+      }
 
       /*HYPRE_Int prefix_sum_workspace[2*(hypre_NumThreads() + 1)];*/
       prefix_sum_workspace = hypre_TAlloc(HYPRE_Int, 2 * (hypre_NumThreads() + 1), HYPRE_MEMORY_HOST);
@@ -2769,6 +3096,14 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
 
       hypre_TFree(prefix_sum_workspace, HYPRE_MEMORY_HOST);
 
+      if (setup_debug_iter_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d graph update done: new_graph_size=%d new_graph_offd_size=%d %.6f s\n",
+                      my_id, iter - 1, graph_size, graph_offd_size,
+                      time_getWallclockSeconds() - setup_debug_phase_time);
+         fflush(NULL);
+      }
+
    } /* end while */
 
    /*
@@ -2789,6 +3124,13 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
    /*---------------------------------------------------
     * Clean up and return
     *---------------------------------------------------*/
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost done: iterations=%d total=%.6f s\n",
+                   my_id, iter, time_getWallclockSeconds() - setup_debug_start_time);
+      fflush(NULL);
+   }
+
    hypre_TFree(measure_array, HYPRE_MEMORY_HOST);
    hypre_TFree(graph_array, HYPRE_MEMORY_HOST);
    hypre_TFree(graph_array2, HYPRE_MEMORY_HOST);
@@ -2819,18 +3161,47 @@ hypre_BoomerAMGCoarsenPMIS( hypre_ParCSRMatrix    *S,
    hypre_GpuProfilingPushRange("PMIS");
 
    HYPRE_Int ierr = 0;
+   HYPRE_Int my_id = 0;
+   HYPRE_Int setup_debug_level = 0;
+   HYPRE_Int setup_debug_print = 0;
+
+   hypre_MPI_Comm_rank(hypre_ParCSRMatrixComm(S), &my_id);
+   setup_debug_level = hypre_BoomerAMGSetupDebugLevel();
+   setup_debug_print = hypre_BoomerAMGSetupDebugShouldPrint(setup_debug_level, my_id);
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMIS dispatch begin: CF_init=%d\n",
+                   my_id, CF_init);
+      fflush(NULL);
+   }
 
 #if defined(HYPRE_USING_GPU)
    HYPRE_ExecutionPolicy exec = hypre_GetExecPolicy1( hypre_ParCSRMatrixMemoryLocation(A) );
 
    if (exec == HYPRE_EXEC_DEVICE)
    {
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMIS dispatch using device path\n", my_id);
+         fflush(NULL);
+      }
       ierr = hypre_BoomerAMGCoarsenPMISDevice( S, A, CF_init, debug_flag, CF_marker_ptr );
    }
    else
 #endif
    {
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMIS dispatch using host path\n", my_id);
+         fflush(NULL);
+      }
       ierr = hypre_BoomerAMGCoarsenPMISHost( S, A, CF_init, debug_flag, CF_marker_ptr );
+   }
+
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMIS dispatch done\n", my_id);
+      fflush(NULL);
    }
 
    hypre_GpuProfilingPopRange();
@@ -2847,15 +3218,45 @@ hypre_BoomerAMGCoarsenHMIS( hypre_ParCSRMatrix    *S,
                             hypre_IntArray       **CF_marker_ptr)
 {
    HYPRE_Int              ierr = 0;
+   HYPRE_Int              my_id = 0;
+   HYPRE_Int              setup_debug_level = 0;
+   HYPRE_Int              setup_debug_print = 0;
+   HYPRE_Real             setup_debug_phase_time = 0.0;
+
+   hypre_MPI_Comm_rank(hypre_ParCSRMatrixComm(S), &my_id);
+   setup_debug_level = hypre_BoomerAMGSetupDebugLevel();
+   setup_debug_print = hypre_BoomerAMGSetupDebugShouldPrint(setup_debug_level, my_id);
 
    /*-------------------------------------------------------
     * Perform Ruge coarsening followed by CLJP coarsening
     *-------------------------------------------------------*/
 
+   if (setup_debug_print)
+   {
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] HMIS Ruge pass begin\n", my_id);
+      fflush(NULL);
+   }
+
    ierr += hypre_BoomerAMGCoarsenRuge (S, A, measure_type, 10, cut_factor,
                                        debug_flag, CF_marker_ptr);
 
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "HMIS Ruge pass done",
+                                       time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] HMIS PMIS pass begin\n", my_id);
+      fflush(NULL);
+   }
+
    ierr += hypre_BoomerAMGCoarsenPMISHost (S, A, 1, debug_flag, CF_marker_ptr);
+
+   if (setup_debug_print)
+   {
+      hypre_BoomerAMGCoarsenDebugPrint(my_id, "HMIS PMIS pass done",
+                                       time_getWallclockSeconds() - setup_debug_phase_time);
+   }
 
    return (ierr);
 }

@@ -79,6 +79,7 @@ typedef struct
    HYPRE_Int      redundant;
    HYPRE_Int      participate;
    HYPRE_Int      Sabs;
+   HYPRE_Int      coarsen_symmetric_strength;
 
    /* solve params */
    HYPRE_Int      max_iter;
@@ -312,6 +313,7 @@ typedef struct
 #define hypre_ParAMGDataStrongThresholdR(amg_data)     ((amg_data) -> strong_thresholdR)
 #define hypre_ParAMGDataFilterThresholdR(amg_data)     ((amg_data) -> filter_thresholdR)
 #define hypre_ParAMGDataSabs(amg_data)                 ((amg_data) -> Sabs)
+#define hypre_ParAMGDataCoarsenSymmetricStrength(amg_data) ((amg_data) -> coarsen_symmetric_strength)
 #define hypre_ParAMGDataMaxRowSum(amg_data)            ((amg_data) -> max_row_sum)
 #define hypre_ParAMGDataTruncFactor(amg_data)          ((amg_data) -> trunc_factor)
 #define hypre_ParAMGDataAggTruncFactor(amg_data)       ((amg_data) -> agg_trunc_factor)
@@ -1820,6 +1822,7 @@ HYPRE_Int HYPRE_BoomerAMGSetFilterThresholdR ( HYPRE_Solver solver, HYPRE_Real f
 HYPRE_Int HYPRE_BoomerAMGGetFilterThresholdR ( HYPRE_Solver solver, HYPRE_Real *filter_threshold );
 HYPRE_Int HYPRE_BoomerAMGSetGMRESSwitchR ( HYPRE_Solver solver, HYPRE_Int gmres_switch );
 HYPRE_Int HYPRE_BoomerAMGSetSabs ( HYPRE_Solver solver, HYPRE_Int Sabs );
+HYPRE_Int HYPRE_BoomerAMGSetCoarsenSymmetricStrength ( HYPRE_Solver solver, HYPRE_Int coarsen_symmetric_strength );
 HYPRE_Int HYPRE_BoomerAMGSetMaxRowSum ( HYPRE_Solver solver, HYPRE_Real max_row_sum );
 HYPRE_Int HYPRE_BoomerAMGGetMaxRowSum ( HYPRE_Solver solver, HYPRE_Real *max_row_sum );
 HYPRE_Int HYPRE_BoomerAMGSetTruncFactor ( HYPRE_Solver solver, HYPRE_Real trunc_factor );
@@ -2445,6 +2448,7 @@ HYPRE_Int hypre_BoomerAMGGetStrongThresholdR ( void *data, HYPRE_Real *strong_th
 HYPRE_Int hypre_BoomerAMGSetFilterThresholdR ( void *data, HYPRE_Real filter_threshold );
 HYPRE_Int hypre_BoomerAMGGetFilterThresholdR ( void *data, HYPRE_Real *filter_threshold );
 HYPRE_Int hypre_BoomerAMGSetSabs ( void *data, HYPRE_Int Sabs );
+HYPRE_Int hypre_BoomerAMGSetCoarsenSymmetricStrength ( void *data, HYPRE_Int coarsen_symmetric_strength );
 HYPRE_Int hypre_BoomerAMGSetMaxRowSum ( void *data, HYPRE_Real max_row_sum );
 HYPRE_Int hypre_BoomerAMGGetMaxRowSum ( void *data, HYPRE_Real *max_row_sum );
 HYPRE_Int hypre_BoomerAMGSetTruncFactor ( void *data, HYPRE_Real trunc_factor );
@@ -4261,4 +4265,3 @@ HYPRE_Int hypre_FSAISetupDevice( void *fsai_vdata, hypre_ParCSRMatrix *A,
 #endif
 
 #endif
-

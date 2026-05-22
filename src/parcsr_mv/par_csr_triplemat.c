@@ -10,6 +10,55 @@
 #include "_hypre_utilities.h"
 #include "../parcsr_mv/_hypre_parcsr_mv.h"
 
+static HYPRE_Int
+hypre_RAPKTHostDebugLevel( void )
+{
+   const char *env = getenv("HYPRE_BAMG_SETUP_DEBUG");
+
+   if (!env || !env[0])
+   {
+      return 0;
+   }
+
+   return hypre_max(atoi(env), 0);
+}
+
+static HYPRE_Int
+hypre_RAPKTHostDebugShouldPrint( HYPRE_Int debug_level,
+                                 HYPRE_Int my_id )
+{
+   return (debug_level > 1) || (debug_level == 1 && my_id == 0);
+}
+
+static void
+hypre_RAPKTHostDebugDone( HYPRE_Int  debug_print,
+                          HYPRE_Int  my_id,
+                          const char *message,
+                          HYPRE_Real elapsed )
+{
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost %s: %.6f s\n",
+                   my_id, message, elapsed);
+      fflush(NULL);
+   }
+}
+
+static void
+hypre_RAPKTHostDebugCSR( HYPRE_Int       debug_print,
+                         HYPRE_Int       my_id,
+                         const char     *name,
+                         hypre_CSRMatrix *A )
+{
+   if (debug_print && A)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost %s: rows=%d cols=%d nnz=%d\n",
+                   my_id, name, hypre_CSRMatrixNumRows(A),
+                   hypre_CSRMatrixNumCols(A), hypre_CSRMatrixNumNonzeros(A));
+      fflush(NULL);
+   }
+}
+
 /*--------------------------------------------------------------------------
  * hypre_ParCSRMatMatHost
  *
@@ -70,6 +119,9 @@ hypre_ParCSRMatMatHost( hypre_ParCSRMatrix  *A,
    HYPRE_Int        cnt, i;
    HYPRE_Int        num_procs;
    HYPRE_Int        my_id;
+   HYPRE_Int        debug_level;
+   HYPRE_Int        debug_print;
+   HYPRE_Real       debug_time;
 
    n_rows_A = hypre_ParCSRMatrixGlobalNumRows(A);
    n_cols_A = hypre_ParCSRMatrixGlobalNumCols(A);
@@ -90,6 +142,22 @@ hypre_ParCSRMatMatHost( hypre_ParCSRMatrix  *A,
 
    hypre_MPI_Comm_size(comm, &num_procs);
    hypre_MPI_Comm_rank(comm, &my_id);
+   debug_level = hypre_RAPKTHostDebugLevel();
+   debug_print = hypre_RAPKTHostDebugShouldPrint(debug_level, my_id);
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost enter: A_rows=%b B_rows=%b A_local_rows=%d B_local_rows=%d A_nnz=%e B_nnz=%e A_offd_cols=%d B_offd_cols=%d\n",
+                   my_id,
+                   hypre_ParCSRMatrixGlobalNumRows(A),
+                   hypre_ParCSRMatrixGlobalNumRows(B),
+                   hypre_ParCSRMatrixNumRows(A),
+                   hypre_ParCSRMatrixNumRows(B),
+                   hypre_ParCSRMatrixDNumNonzeros(A),
+                   hypre_ParCSRMatrixDNumNonzeros(B),
+                   hypre_CSRMatrixNumCols(A_offd),
+                   hypre_CSRMatrixNumCols(B_offd));
+      fflush(NULL);
+   }
    last_col_diag_B = first_col_diag_B + num_cols_diag_B - 1;
 
    if (num_procs > 1)
@@ -99,27 +167,90 @@ hypre_ParCSRMatMatHost( hypre_ParCSRMatrix  *A,
        * equally load balanced partitionings within
        * hypre_ParCSRMatrixExtractBExt
        *--------------------------------------------------------------------*/
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost Bext extract begin\n", my_id);
+         fflush(NULL);
+      }
       Bs_ext = hypre_ParCSRMatrixExtractBExt(B, A, 1); /* contains communication
                                                           which should be explicitly included to allow for overlap */
+      hypre_RAPKTHostDebugDone(debug_print, my_id, "MatMatHost Bext extract done",
+                               time_getWallclockSeconds() - debug_time);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost Bs_ext", Bs_ext);
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost Bext split begin\n", my_id);
+         fflush(NULL);
+      }
       hypre_CSRMatrixSplit(Bs_ext, first_col_diag_B, last_col_diag_B, num_cols_offd_B, col_map_offd_B,
                            &num_cols_offd_C, &col_map_offd_C, &Bext_diag, &Bext_offd);
+      hypre_RAPKTHostDebugDone(debug_print, my_id, "MatMatHost Bext split done",
+                               time_getWallclockSeconds() - debug_time);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost Bext_diag", Bext_diag);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost Bext_offd", Bext_offd);
 
       hypre_CSRMatrixDestroy(Bs_ext);
 
       /* These are local and could be overlapped with communication */
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost A_diag*B_diag begin\n", my_id);
+         fflush(NULL);
+      }
       AB_diag = hypre_CSRMatrixMultiplyHost(A_diag, B_diag);
+      hypre_RAPKTHostDebugDone(debug_print, my_id, "MatMatHost A_diag*B_diag done",
+                               time_getWallclockSeconds() - debug_time);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost AB_diag", AB_diag);
+
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost A_diag*B_offd begin\n", my_id);
+         fflush(NULL);
+      }
       AB_offd = hypre_CSRMatrixMultiplyHost(A_diag, B_offd);
+      hypre_RAPKTHostDebugDone(debug_print, my_id, "MatMatHost A_diag*B_offd done",
+                               time_getWallclockSeconds() - debug_time);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost AB_offd", AB_offd);
 
       /* These require data from other processes */
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost A_offd*Bext_diag begin\n", my_id);
+         fflush(NULL);
+      }
       ABext_diag = hypre_CSRMatrixMultiplyHost(A_offd, Bext_diag);
+      hypre_RAPKTHostDebugDone(debug_print, my_id, "MatMatHost A_offd*Bext_diag done",
+                               time_getWallclockSeconds() - debug_time);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost ABext_diag", ABext_diag);
+
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost A_offd*Bext_offd begin\n", my_id);
+         fflush(NULL);
+      }
       ABext_offd = hypre_CSRMatrixMultiplyHost(A_offd, Bext_offd);
+      hypre_RAPKTHostDebugDone(debug_print, my_id, "MatMatHost A_offd*Bext_offd done",
+                               time_getWallclockSeconds() - debug_time);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost ABext_offd", ABext_offd);
 
       hypre_CSRMatrixDestroy(Bext_diag);
       hypre_CSRMatrixDestroy(Bext_offd);
 
       if (num_cols_offd_B)
       {
+         if (debug_print)
+         {
+            debug_time = time_getWallclockSeconds();
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost remap AB_offd columns begin\n", my_id);
+            fflush(NULL);
+         }
          map_B_to_C = hypre_CTAlloc(HYPRE_Int, num_cols_offd_B, HYPRE_MEMORY_HOST);
 
          cnt = 0;
@@ -145,14 +276,26 @@ hypre_ParCSRMatMatHost( hypre_ParCSRMatrix  *A,
       if (num_cols_offd_B)
       {
          hypre_TFree(map_B_to_C, HYPRE_MEMORY_HOST);
+         hypre_RAPKTHostDebugDone(debug_print, my_id, "MatMatHost remap AB_offd columns done",
+                                  time_getWallclockSeconds() - debug_time);
       }
 
       hypre_CSRMatrixNumCols(AB_diag) = num_cols_diag_B;
       hypre_CSRMatrixNumCols(ABext_diag) = num_cols_diag_B;
       hypre_CSRMatrixNumCols(AB_offd) = num_cols_offd_C;
       hypre_CSRMatrixNumCols(ABext_offd) = num_cols_offd_C;
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost add local/external products begin\n", my_id);
+         fflush(NULL);
+      }
       C_diag = hypre_CSRMatrixAdd(1.0, AB_diag, 1.0, ABext_diag);
       C_offd = hypre_CSRMatrixAdd(1.0, AB_offd, 1.0, ABext_offd);
+      hypre_RAPKTHostDebugDone(debug_print, my_id, "MatMatHost add local/external products done",
+                               time_getWallclockSeconds() - debug_time);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost C_diag", C_diag);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost C_offd", C_offd);
 
       hypre_CSRMatrixDestroy(AB_diag);
       hypre_CSRMatrixDestroy(ABext_diag);
@@ -161,7 +304,17 @@ hypre_ParCSRMatMatHost( hypre_ParCSRMatrix  *A,
    }
    else
    {
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost single-rank A_diag*B_diag begin\n", my_id);
+         fflush(NULL);
+      }
       C_diag = hypre_CSRMatrixMultiplyHost(A_diag, B_diag);
+      hypre_RAPKTHostDebugDone(debug_print, my_id, "MatMatHost single-rank A_diag*B_diag done",
+                               time_getWallclockSeconds() - debug_time);
+      hypre_RAPKTHostDebugCSR(debug_print, my_id, "MatMatHost single-rank C_diag", C_diag);
+
       C_offd = hypre_CSRMatrixCreate(num_rows_diag_A, 0, 0);
       hypre_CSRMatrixInitialize_v2(C_offd, 0, hypre_CSRMatrixMemoryLocation(C_diag));
    }
@@ -184,6 +337,18 @@ hypre_ParCSRMatMatHost( hypre_ParCSRMatrix  *A,
    if (num_cols_offd_C)
    {
       hypre_ParCSRMatrixColMapOffd(C) = col_map_offd_C;
+   }
+
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] MatMatHost done: C_rows=%b C_local_rows=%d C_diag_nnz=%d C_offd_nnz=%d C_offd_cols=%d\n",
+                   my_id,
+                   hypre_ParCSRMatrixGlobalNumRows(C),
+                   hypre_ParCSRMatrixNumRows(C),
+                   hypre_CSRMatrixNumNonzeros(hypre_ParCSRMatrixDiag(C)),
+                   hypre_CSRMatrixNumNonzeros(hypre_ParCSRMatrixOffd(C)),
+                   hypre_CSRMatrixNumCols(hypre_ParCSRMatrixOffd(C)));
+      fflush(NULL);
    }
 
    return C;
@@ -592,9 +757,30 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
    HYPRE_Int             j_indx;
    HYPRE_Int             num_procs, my_id;
    HYPRE_Int             cnt, i;
+   HYPRE_Int             debug_level = 0;
+   HYPRE_Int             debug_print = 0;
+   HYPRE_Real            debug_time = 0.0;
 
    hypre_MPI_Comm_size(comm, &num_procs);
    hypre_MPI_Comm_rank(comm, &my_id);
+   debug_level = hypre_RAPKTHostDebugLevel();
+   debug_print = hypre_RAPKTHostDebugShouldPrint(debug_level, my_id);
+
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost enter: R_rows=%b A_rows=%b P_rows=%b R_local_rows=%d A_local_rows=%d P_local_rows=%d R_nnz=%e A_nnz=%e P_nnz=%e\n",
+                   my_id,
+                   hypre_ParCSRMatrixGlobalNumRows(R),
+                   hypre_ParCSRMatrixGlobalNumRows(A),
+                   hypre_ParCSRMatrixGlobalNumRows(P),
+                   hypre_ParCSRMatrixNumRows(R),
+                   hypre_ParCSRMatrixNumRows(A),
+                   hypre_ParCSRMatrixNumRows(P),
+                   hypre_ParCSRMatrixDNumNonzeros(R),
+                   hypre_ParCSRMatrixDNumNonzeros(A),
+                   hypre_ParCSRMatrixDNumNonzeros(P));
+      fflush(NULL);
+   }
 
    if ( n_rows_R != n_rows_A || num_rows_diag_R != num_rows_diag_A ||
         n_cols_A != n_rows_P || num_cols_diag_A != num_rows_diag_P )
@@ -604,6 +790,12 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
    }
 
    /* Compute RT_diag if necessary */
+   if (debug_print)
+   {
+      debug_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost RT_diag transpose begin\n", my_id);
+      fflush(NULL);
+   }
    if (!hypre_ParCSRMatrixDiagT(R))
    {
       hypre_CSRMatrixTranspose(R_diag, &RT_diag, 1);
@@ -612,6 +804,8 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
    {
       RT_diag = hypre_ParCSRMatrixDiagT(R);
    }
+   hypre_RAPKTHostDebugDone(debug_print, my_id, "RT_diag transpose done",
+                            time_getWallclockSeconds() - debug_time);
 
    if (num_procs > 1)
    {
@@ -632,24 +826,62 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
       void            *request;
 
       /*---------------------------------------------------------------------
-       * If there exists no CommPkg for A, a CommPkg is generated using
-       * equally load balanced partitionings within
-       * hypre_ParCSRMatrixExtractBExt
-       *--------------------------------------------------------------------*/
-      Ps_ext = hypre_ParCSRMatrixExtractBExt(P, A, 1); /* contains communication
-                                                          which should be explicitly included to allow for overlap */
-      if (num_cols_offd_A)
-      {
-         last_col_diag_P = first_col_diag_P + num_cols_diag_P - 1;
-         hypre_CSRMatrixSplit(Ps_ext, first_col_diag_P, last_col_diag_P, num_cols_offd_P, col_map_offd_P,
-                              &num_cols_offd_Q, &col_map_offd_Q, &Pext_diag, &Pext_offd);
-         /* These require data from other processes */
-         APext_diag = hypre_CSRMatrixMultiplyHost(A_offd, Pext_diag);
-         APext_offd = hypre_CSRMatrixMultiplyHost(A_offd, Pext_offd);
+	       * If there exists no CommPkg for A, a CommPkg is generated using
+	       * equally load balanced partitionings within
+	       * hypre_ParCSRMatrixExtractBExt
+	       *--------------------------------------------------------------------*/
+	      if (debug_print)
+	      {
+	         debug_time = time_getWallclockSeconds();
+	         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost Pext extract begin\n", my_id);
+	         fflush(NULL);
+	      }
+	      Ps_ext = hypre_ParCSRMatrixExtractBExt(P, A, 1); /* contains communication
+	                                                          which should be explicitly included to allow for overlap */
+	      hypre_RAPKTHostDebugDone(debug_print, my_id, "Pext extract done",
+	                               time_getWallclockSeconds() - debug_time);
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "Ps_ext", Ps_ext);
+	      if (num_cols_offd_A)
+	      {
+	         last_col_diag_P = first_col_diag_P + num_cols_diag_P - 1;
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost Pext split begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         hypre_CSRMatrixSplit(Ps_ext, first_col_diag_P, last_col_diag_P, num_cols_offd_P, col_map_offd_P,
+	                              &num_cols_offd_Q, &col_map_offd_Q, &Pext_diag, &Pext_offd);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "Pext split done",
+	                                  time_getWallclockSeconds() - debug_time);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "Pext_diag", Pext_diag);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "Pext_offd", Pext_offd);
+	         /* These require data from other processes */
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost A_offd*Pext_diag begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         APext_diag = hypre_CSRMatrixMultiplyHost(A_offd, Pext_diag);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "A_offd*Pext_diag done",
+	                                  time_getWallclockSeconds() - debug_time);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "APext_diag", APext_diag);
 
-         hypre_CSRMatrixDestroy(Pext_diag);
-         hypre_CSRMatrixDestroy(Pext_offd);
-      }
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost A_offd*Pext_offd begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         APext_offd = hypre_CSRMatrixMultiplyHost(A_offd, Pext_offd);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "A_offd*Pext_offd done",
+	                                  time_getWallclockSeconds() - debug_time);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "APext_offd", APext_offd);
+
+	         hypre_CSRMatrixDestroy(Pext_diag);
+	         hypre_CSRMatrixDestroy(Pext_offd);
+	      }
       else
       {
          num_cols_offd_Q = num_cols_offd_P;
@@ -658,20 +890,44 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
          {
             col_map_offd_Q[i] = col_map_offd_P[i];
          }
-      }
-      hypre_CSRMatrixDestroy(Ps_ext);
+	      }
+	      hypre_CSRMatrixDestroy(Ps_ext);
 
-      /* These are local and could be overlapped with communication */
-      AP_diag = hypre_CSRMatrixMultiplyHost(A_diag, P_diag);
+	      /* These are local and could be overlapped with communication */
+	      if (debug_print)
+	      {
+	         debug_time = time_getWallclockSeconds();
+	         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost A_diag*P_diag begin\n", my_id);
+	         fflush(NULL);
+	      }
+	      AP_diag = hypre_CSRMatrixMultiplyHost(A_diag, P_diag);
+	      hypre_RAPKTHostDebugDone(debug_print, my_id, "A_diag*P_diag done",
+	                               time_getWallclockSeconds() - debug_time);
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "AP_diag", AP_diag);
 
-      if (num_cols_offd_P)
-      {
-         AP_offd = hypre_CSRMatrixMultiplyHost(A_diag, P_offd);
-         if (num_cols_offd_Q > num_cols_offd_P)
-         {
-            map_P_to_Q = hypre_CTAlloc(HYPRE_Int, num_cols_offd_P, HYPRE_MEMORY_HOST);
+	      if (num_cols_offd_P)
+	      {
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost A_diag*P_offd begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         AP_offd = hypre_CSRMatrixMultiplyHost(A_diag, P_offd);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "A_diag*P_offd done",
+	                                  time_getWallclockSeconds() - debug_time);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "AP_offd", AP_offd);
+	         if (num_cols_offd_Q > num_cols_offd_P)
+	         {
+	            if (debug_print)
+	            {
+	               debug_time = time_getWallclockSeconds();
+	               hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost remap AP_offd columns begin\n", my_id);
+	               fflush(NULL);
+	            }
+	            map_P_to_Q = hypre_CTAlloc(HYPRE_Int, num_cols_offd_P, HYPRE_MEMORY_HOST);
 
-            cnt = 0;
+	            cnt = 0;
             for (i = 0; i < num_cols_offd_Q; i++)
             {
                if (col_map_offd_Q[i] == col_map_offd_P[cnt])
@@ -690,30 +946,49 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
                AP_offd_j[i] = map_P_to_Q[AP_offd_j[i]];
             }
 
-            hypre_TFree(map_P_to_Q, HYPRE_MEMORY_HOST);
-            hypre_CSRMatrixNumCols(AP_offd) = num_cols_offd_Q;
-         }
-      }
+	            hypre_TFree(map_P_to_Q, HYPRE_MEMORY_HOST);
+	            hypre_CSRMatrixNumCols(AP_offd) = num_cols_offd_Q;
+	            hypre_RAPKTHostDebugDone(debug_print, my_id, "remap AP_offd columns done",
+	                                     time_getWallclockSeconds() - debug_time);
+	         }
+	      }
 
-      if (num_cols_offd_A) /* number of rows for Pext_diag */
-      {
-         Q_diag = hypre_CSRMatrixAdd(1.0, AP_diag, 1.0, APext_diag);
-         hypre_CSRMatrixDestroy(AP_diag);
-         hypre_CSRMatrixDestroy(APext_diag);
-      }
-      else
-      {
-         Q_diag = AP_diag;
-      }
+	      if (num_cols_offd_A) /* number of rows for Pext_diag */
+	      {
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost Q_diag add begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         Q_diag = hypre_CSRMatrixAdd(1.0, AP_diag, 1.0, APext_diag);
+	         hypre_CSRMatrixDestroy(AP_diag);
+	         hypre_CSRMatrixDestroy(APext_diag);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "Q_diag add done",
+	                                  time_getWallclockSeconds() - debug_time);
+	      }
+	      else
+	      {
+	         Q_diag = AP_diag;
+	      }
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "Q_diag", Q_diag);
 
-      if (num_cols_offd_P && num_cols_offd_A)
-      {
-         Q_offd = hypre_CSRMatrixAdd(1.0, AP_offd, 1.0, APext_offd);
-         hypre_CSRMatrixDestroy(APext_offd);
-         hypre_CSRMatrixDestroy(AP_offd);
-      }
-      else if (num_cols_offd_A)
-      {
+	      if (num_cols_offd_P && num_cols_offd_A)
+	      {
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost Q_offd add begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         Q_offd = hypre_CSRMatrixAdd(1.0, AP_offd, 1.0, APext_offd);
+	         hypre_CSRMatrixDestroy(APext_offd);
+	         hypre_CSRMatrixDestroy(AP_offd);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "Q_offd add done",
+	                                  time_getWallclockSeconds() - debug_time);
+	      }
+	      else if (num_cols_offd_A)
+	      {
          Q_offd = APext_offd;
       }
       else if (num_cols_offd_P)
@@ -721,63 +996,135 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
          Q_offd = AP_offd;
       }
       else
-      {
-         Q_offd = hypre_CSRMatrixClone(A_offd, 1);
-      }
+	      {
+	         Q_offd = hypre_CSRMatrixClone(A_offd, 1);
+	      }
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "Q_offd", Q_offd);
 
-      Q = hypre_ParCSRMatrixCreate(comm, n_rows_A, n_cols_P, row_starts_A,
-                                   col_starts_P, num_cols_offd_Q,
-                                   Q_diag->num_nonzeros, Q_offd->num_nonzeros);
+	      if (debug_print)
+	      {
+	         debug_time = time_getWallclockSeconds();
+	         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost Q ParCSR create begin\n", my_id);
+	         fflush(NULL);
+	      }
+	      Q = hypre_ParCSRMatrixCreate(comm, n_rows_A, n_cols_P, row_starts_A,
+	                                   col_starts_P, num_cols_offd_Q,
+	                                   Q_diag->num_nonzeros, Q_offd->num_nonzeros);
 
       hypre_CSRMatrixDestroy(hypre_ParCSRMatrixDiag(Q));
       hypre_CSRMatrixDestroy(hypre_ParCSRMatrixOffd(Q));
-      hypre_ParCSRMatrixDiag(Q) = Q_diag;
-      hypre_ParCSRMatrixOffd(Q) = Q_offd;
-      hypre_ParCSRMatrixColMapOffd(Q) = col_map_offd_Q;
+	      hypre_ParCSRMatrixDiag(Q) = Q_diag;
+	      hypre_ParCSRMatrixOffd(Q) = Q_offd;
+	      hypre_ParCSRMatrixColMapOffd(Q) = col_map_offd_Q;
+	      hypre_RAPKTHostDebugDone(debug_print, my_id, "Q ParCSR create done",
+	                               time_getWallclockSeconds() - debug_time);
 
-      C_tmp_diag = hypre_CSRMatrixMultiplyHost(RT_diag, Q_diag);
-      if (num_cols_offd_Q)
-      {
-         C_tmp_offd = hypre_CSRMatrixMultiplyHost(RT_diag, Q_offd);
-      }
-      else
-      {
-         C_tmp_offd = hypre_CSRMatrixClone(Q_offd, 1);
-         hypre_CSRMatrixNumRows(C_tmp_offd) = num_cols_diag_R;
-      }
+	      if (debug_print)
+	      {
+	         debug_time = time_getWallclockSeconds();
+	         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost RT_diag*Q_diag begin\n", my_id);
+	         fflush(NULL);
+	      }
+	      C_tmp_diag = hypre_CSRMatrixMultiplyHost(RT_diag, Q_diag);
+	      hypre_RAPKTHostDebugDone(debug_print, my_id, "RT_diag*Q_diag done",
+	                               time_getWallclockSeconds() - debug_time);
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_tmp_diag", C_tmp_diag);
+	      if (num_cols_offd_Q)
+	      {
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost RT_diag*Q_offd begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         C_tmp_offd = hypre_CSRMatrixMultiplyHost(RT_diag, Q_offd);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "RT_diag*Q_offd done",
+	                                  time_getWallclockSeconds() - debug_time);
+	      }
+	      else
+	      {
+	         C_tmp_offd = hypre_CSRMatrixClone(Q_offd, 1);
+	         hypre_CSRMatrixNumRows(C_tmp_offd) = num_cols_diag_R;
+	      }
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_tmp_offd", C_tmp_offd);
 
-      if (num_cols_offd_R)
-      {
-         /* Compute RT_offd if necessary */
-         if (!hypre_ParCSRMatrixOffdT(R))
-         {
-            hypre_CSRMatrixTranspose(R_offd, &RT_offd, 1);
+	      if (num_cols_offd_R)
+	      {
+	         /* Compute RT_offd if necessary */
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost RT_offd transpose begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         if (!hypre_ParCSRMatrixOffdT(R))
+	         {
+	            hypre_CSRMatrixTranspose(R_offd, &RT_offd, 1);
          }
          else
-         {
-            RT_offd = hypre_ParCSRMatrixOffdT(R);
-         }
+	         {
+	            RT_offd = hypre_ParCSRMatrixOffdT(R);
+	         }
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "RT_offd transpose done",
+	                                  time_getWallclockSeconds() - debug_time);
 
-         C_int_diag = hypre_CSRMatrixMultiplyHost(RT_offd, Q_diag);
-         C_int_offd = hypre_CSRMatrixMultiplyHost(RT_offd, Q_offd);
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost RT_offd*Q_diag begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         C_int_diag = hypre_CSRMatrixMultiplyHost(RT_offd, Q_diag);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "RT_offd*Q_diag done",
+	                                  time_getWallclockSeconds() - debug_time);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_int_diag", C_int_diag);
 
-         hypre_ParCSRMatrixDiag(Q) = C_int_diag;
-         hypre_ParCSRMatrixOffd(Q) = C_int_offd;
-         C_int = hypre_MergeDiagAndOffd(Q);
-         hypre_ParCSRMatrixDiag(Q) = Q_diag;
-         hypre_ParCSRMatrixOffd(Q) = Q_offd;
-      }
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost RT_offd*Q_offd begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         C_int_offd = hypre_CSRMatrixMultiplyHost(RT_offd, Q_offd);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "RT_offd*Q_offd done",
+	                                  time_getWallclockSeconds() - debug_time);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_int_offd", C_int_offd);
+
+	         hypre_ParCSRMatrixDiag(Q) = C_int_diag;
+	         hypre_ParCSRMatrixOffd(Q) = C_int_offd;
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost C_int merge begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         C_int = hypre_MergeDiagAndOffd(Q);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "C_int merge done",
+	                                  time_getWallclockSeconds() - debug_time);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_int", C_int);
+	         hypre_ParCSRMatrixDiag(Q) = Q_diag;
+	         hypre_ParCSRMatrixOffd(Q) = Q_offd;
+	      }
       else
       {
          C_int = hypre_CSRMatrixCreate(0, 0, 0);
          hypre_CSRMatrixInitialize(C_int);
       }
 
-      /* contains communication; should be explicitly included to allow for overlap */
-      hypre_ExchangeExternalRowsInit(C_int, comm_pkg_R, &request);
-      C_ext = hypre_ExchangeExternalRowsWait(request);
+	      /* contains communication; should be explicitly included to allow for overlap */
+	      if (debug_print)
+	      {
+	         debug_time = time_getWallclockSeconds();
+	         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost C_int exchange begin\n", my_id);
+	         fflush(NULL);
+	      }
+	      hypre_ExchangeExternalRowsInit(C_int, comm_pkg_R, &request);
+	      C_ext = hypre_ExchangeExternalRowsWait(request);
+	      hypre_RAPKTHostDebugDone(debug_print, my_id, "C_int exchange done",
+	                               time_getWallclockSeconds() - debug_time);
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_ext", C_ext);
 
-      hypre_CSRMatrixDestroy(C_int);
+	      hypre_CSRMatrixDestroy(C_int);
       if (num_cols_offd_R)
       {
          hypre_CSRMatrixDestroy(C_int_diag);
@@ -804,28 +1151,44 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
       /* split C_ext in local C_ext_diag and nonlocal part C_ext_offd,
          also generate new col_map_offd and adjust column indices accordingly */
 
-      if (C_ext)
-      {
-         first_col_diag_C = first_col_diag_P;
-         last_col_diag_C = first_col_diag_P + num_cols_diag_P - 1;
+	      if (C_ext)
+	      {
+	         first_col_diag_C = first_col_diag_P;
+	         last_col_diag_C = first_col_diag_P + num_cols_diag_P - 1;
 
-         hypre_CSRMatrixSplit(C_ext, first_col_diag_C, last_col_diag_C,
-                              num_cols_offd_Q, col_map_offd_Q, &num_cols_offd_C, &col_map_offd_C,
-                              &C_ext_diag, &C_ext_offd);
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost C_ext split begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         hypre_CSRMatrixSplit(C_ext, first_col_diag_C, last_col_diag_C,
+	                              num_cols_offd_Q, col_map_offd_Q, &num_cols_offd_C, &col_map_offd_C,
+	                              &C_ext_diag, &C_ext_offd);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "C_ext split done",
+	                                  time_getWallclockSeconds() - debug_time);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_ext_diag", C_ext_diag);
+	         hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_ext_offd", C_ext_offd);
 
-         hypre_CSRMatrixDestroy(C_ext);
-         C_ext = NULL;
+	         hypre_CSRMatrixDestroy(C_ext);
+	         C_ext = NULL;
          /*if (C_ext_offd->num_nonzeros == 0) C_ext_offd->num_cols = 0;*/
       }
 
-      if (num_cols_offd_Q && C_tmp_offd->num_cols)
-      {
-         C_tmp_offd_i = hypre_CSRMatrixI(C_tmp_offd);
-         C_tmp_offd_j = hypre_CSRMatrixJ(C_tmp_offd);
+	      if (num_cols_offd_Q && C_tmp_offd->num_cols)
+	      {
+	         C_tmp_offd_i = hypre_CSRMatrixI(C_tmp_offd);
+	         C_tmp_offd_j = hypre_CSRMatrixJ(C_tmp_offd);
 
-         map_Q_to_C = hypre_CTAlloc(HYPRE_Int, num_cols_offd_Q, HYPRE_MEMORY_HOST);
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost remap C_tmp_offd columns begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         map_Q_to_C = hypre_CTAlloc(HYPRE_Int, num_cols_offd_Q, HYPRE_MEMORY_HOST);
 
-         cnt = 0;
+	         cnt = 0;
          for (i = 0; i < num_cols_offd_C; i++)
          {
             if (col_map_offd_C[i] == col_map_offd_Q[cnt])
@@ -840,48 +1203,87 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
          for (i = 0; i < C_tmp_offd_i[hypre_CSRMatrixNumRows(C_tmp_offd)]; i++)
          {
             j_indx = C_tmp_offd_j[i];
-            C_tmp_offd_j[i] = map_Q_to_C[j_indx];
-         }
-         hypre_TFree(map_Q_to_C, HYPRE_MEMORY_HOST);
-      }
-      hypre_CSRMatrixNumCols(C_tmp_offd) = num_cols_offd_C;
-      hypre_ParCSRMatrixDestroy(Q);
+	            C_tmp_offd_j[i] = map_Q_to_C[j_indx];
+	         }
+	         hypre_TFree(map_Q_to_C, HYPRE_MEMORY_HOST);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "remap C_tmp_offd columns done",
+	                                  time_getWallclockSeconds() - debug_time);
+	      }
+	      hypre_CSRMatrixNumCols(C_tmp_offd) = num_cols_offd_C;
+	      hypre_ParCSRMatrixDestroy(Q);
 
       /*-----------------------------------------------------------------------
        *  Need to compute C_diag = C_tmp_diag + C_ext_diag
        *  and  C_offd = C_tmp_offd + C_ext_offd   !!!!
        *-----------------------------------------------------------------------*/
 
-      send_map_elmts_R = hypre_ParCSRCommPkgSendMapElmts(comm_pkg_R);
-      if (C_ext_diag)
-      {
-         C_diag = hypre_CSRMatrixAddPartial(C_tmp_diag, C_ext_diag, send_map_elmts_R);
-         hypre_CSRMatrixDestroy(C_tmp_diag);
-         hypre_CSRMatrixDestroy(C_ext_diag);
-      }
-      else
-      {
-         C_diag = C_tmp_diag;
-      }
+	      send_map_elmts_R = hypre_ParCSRCommPkgSendMapElmts(comm_pkg_R);
+	      if (C_ext_diag)
+	      {
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost C_diag partial add begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         C_diag = hypre_CSRMatrixAddPartial(C_tmp_diag, C_ext_diag, send_map_elmts_R);
+	         hypre_CSRMatrixDestroy(C_tmp_diag);
+	         hypre_CSRMatrixDestroy(C_ext_diag);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "C_diag partial add done",
+	                                  time_getWallclockSeconds() - debug_time);
+	      }
+	      else
+	      {
+	         C_diag = C_tmp_diag;
+	      }
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_diag", C_diag);
 
-      if (C_ext_offd)
-      {
-         C_offd = hypre_CSRMatrixAddPartial(C_tmp_offd, C_ext_offd, send_map_elmts_R);
-         hypre_CSRMatrixDestroy(C_tmp_offd);
-         hypre_CSRMatrixDestroy(C_ext_offd);
-      }
-      else
-      {
-         C_offd = C_tmp_offd;
-      }
-   }
-   else
-   {
-      Q_diag = hypre_CSRMatrixMultiplyHost(A_diag, P_diag);
-      C_diag = hypre_CSRMatrixMultiplyHost(RT_diag, Q_diag);
-      C_offd = hypre_CSRMatrixCreate(num_cols_diag_R, 0, 0);
-      hypre_CSRMatrixInitialize_v2(C_offd, 0, hypre_CSRMatrixMemoryLocation(C_diag));
-      hypre_CSRMatrixDestroy(Q_diag);
+	      if (C_ext_offd)
+	      {
+	         if (debug_print)
+	         {
+	            debug_time = time_getWallclockSeconds();
+	            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost C_offd partial add begin\n", my_id);
+	            fflush(NULL);
+	         }
+	         C_offd = hypre_CSRMatrixAddPartial(C_tmp_offd, C_ext_offd, send_map_elmts_R);
+	         hypre_CSRMatrixDestroy(C_tmp_offd);
+	         hypre_CSRMatrixDestroy(C_ext_offd);
+	         hypre_RAPKTHostDebugDone(debug_print, my_id, "C_offd partial add done",
+	                                  time_getWallclockSeconds() - debug_time);
+	      }
+	      else
+	      {
+	         C_offd = C_tmp_offd;
+	      }
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "C_offd", C_offd);
+	   }
+	   else
+	   {
+	      if (debug_print)
+	      {
+	         debug_time = time_getWallclockSeconds();
+	         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost single-rank A_diag*P_diag begin\n", my_id);
+	         fflush(NULL);
+	      }
+	      Q_diag = hypre_CSRMatrixMultiplyHost(A_diag, P_diag);
+	      hypre_RAPKTHostDebugDone(debug_print, my_id, "single-rank A_diag*P_diag done",
+	                               time_getWallclockSeconds() - debug_time);
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "single-rank Q_diag", Q_diag);
+
+	      if (debug_print)
+	      {
+	         debug_time = time_getWallclockSeconds();
+	         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost single-rank RT_diag*Q_diag begin\n", my_id);
+	         fflush(NULL);
+	      }
+	      C_diag = hypre_CSRMatrixMultiplyHost(RT_diag, Q_diag);
+	      hypre_RAPKTHostDebugDone(debug_print, my_id, "single-rank RT_diag*Q_diag done",
+	                               time_getWallclockSeconds() - debug_time);
+	      hypre_RAPKTHostDebugCSR(debug_print, my_id, "single-rank C_diag", C_diag);
+	      C_offd = hypre_CSRMatrixCreate(num_cols_diag_R, 0, 0);
+	      hypre_CSRMatrixInitialize_v2(C_offd, 0, hypre_CSRMatrixMemoryLocation(C_diag));
+	      hypre_CSRMatrixDestroy(Q_diag);
    }
 
    if (!hypre_ParCSRMatrixDiagT(R))
@@ -893,11 +1295,17 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
       else
       {
          hypre_CSRMatrixDestroy(RT_diag);
-      }
-   }
+	      }
+	   }
 
-   C = hypre_ParCSRMatrixCreate(comm, n_cols_R, n_cols_P, col_starts_R,
-                                col_starts_P, num_cols_offd_C, 0, 0);
+	   if (debug_print)
+	   {
+	      debug_time = time_getWallclockSeconds();
+	      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost C ParCSR create begin\n", my_id);
+	      fflush(NULL);
+	   }
+	   C = hypre_ParCSRMatrixCreate(comm, n_cols_R, n_cols_P, col_starts_R,
+	                                col_starts_P, num_cols_offd_C, 0, 0);
 
    hypre_CSRMatrixDestroy(hypre_ParCSRMatrixDiag(C));
    hypre_CSRMatrixDestroy(hypre_ParCSRMatrixOffd(C));
@@ -914,16 +1322,37 @@ hypre_ParCSRMatrixRAPKTHost( hypre_ParCSRMatrix *R,
       hypre_ParCSRMatrixOffd(C) = C_offd;
    }
 
-   hypre_ParCSRMatrixColMapOffd(C) = col_map_offd_C;
+	   hypre_ParCSRMatrixColMapOffd(C) = col_map_offd_C;
+	   hypre_RAPKTHostDebugDone(debug_print, my_id, "C ParCSR create done",
+	                            time_getWallclockSeconds() - debug_time);
 
-   if (num_procs > 1)
-   {
-      /* hypre_GenerateRAPCommPkg(RAP, A); */
-      hypre_MatvecCommPkgCreate(C);
-   }
+	   if (num_procs > 1)
+	   {
+	      /* hypre_GenerateRAPCommPkg(RAP, A); */
+	      if (debug_print)
+	      {
+	         debug_time = time_getWallclockSeconds();
+	         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost C comm package begin\n", my_id);
+	         fflush(NULL);
+	      }
+	      hypre_MatvecCommPkgCreate(C);
+	      hypre_RAPKTHostDebugDone(debug_print, my_id, "C comm package done",
+	                               time_getWallclockSeconds() - debug_time);
+	   }
 
-   return C;
-}
+	   if (debug_print)
+	   {
+	      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTHost done: C_rows=%b C_local_rows=%d C_diag_nnz=%d C_offd_nnz=%d\n",
+	                   my_id,
+	                   hypre_ParCSRMatrixGlobalNumRows(C),
+	                   hypre_ParCSRMatrixNumRows(C),
+	                   hypre_CSRMatrixNumNonzeros(hypre_ParCSRMatrixDiag(C)),
+	                   hypre_CSRMatrixNumNonzeros(hypre_ParCSRMatrixOffd(C)));
+	      fflush(NULL);
+	   }
+
+	   return C;
+	}
 
 /*--------------------------------------------------------------------------
  * hypre_ParCSRMatrixRAPKT

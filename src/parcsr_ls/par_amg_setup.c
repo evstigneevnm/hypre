@@ -15,6 +15,27 @@
 #define PRINT_CF 0
 
 #define DEBUG_SAVE_ALL_OPS 0
+
+static HYPRE_Int
+hypre_BoomerAMGSetupDebugLevel( void )
+{
+   const char *env = getenv("HYPRE_BAMG_SETUP_DEBUG");
+
+   if (!env || !env[0])
+   {
+      return 0;
+   }
+
+   return hypre_max(atoi(env), 0);
+}
+
+static HYPRE_Int
+hypre_BoomerAMGSetupDebugShouldPrint( HYPRE_Int debug_level,
+                                      HYPRE_Int my_id )
+{
+   return (debug_level > 1) || (debug_level == 1 && my_id == 0);
+}
+
 /*****************************************************************************
  *
  * Routine for driving the setup phase of AMG
@@ -56,6 +77,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    HYPRE_Real           strong_threshold;
    HYPRE_Int            coarsen_cut_factor;
    HYPRE_Int            useSabs;
+   HYPRE_Int            use_coarsen_symmetric_strength;
    HYPRE_Real           CR_strong_th;
    HYPRE_Real           max_row_sum;
    HYPRE_Real           trunc_factor, jacobi_trunc_threshold;
@@ -95,7 +117,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    hypre_IntArray      *CFN_marker = NULL;
    hypre_IntArray      *CF2_marker = NULL;
    hypre_IntArray      *CF3_marker = NULL;
-   hypre_ParCSRMatrix  *S = NULL, *Sabs = NULL;
+   hypre_ParCSRMatrix  *S = NULL, *Sabs = NULL, *S_coarsen = NULL;
    hypre_ParCSRMatrix  *S2;
    hypre_ParCSRMatrix  *SN = NULL;
    hypre_ParCSRMatrix  *SCR;
@@ -225,6 +247,10 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    HYPRE_Int      *num_grid_sweeps = hypre_ParAMGDataNumGridSweeps(amg_data);
    HYPRE_Int       ns = num_grid_sweeps[1];
    HYPRE_Real      wall_time;   /* for debugging instrumentation */
+   HYPRE_Int       setup_debug_level = 0;
+   HYPRE_Int       setup_debug_print = 0;
+   HYPRE_Real      setup_debug_start_time = 0.0;
+   HYPRE_Real      setup_debug_phase_time = 0.0;
    HYPRE_Int       add_end;
 
 #ifdef HYPRE_USING_DSUPERLU
@@ -308,6 +334,19 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    dof_func = hypre_ParAMGDataDofFunc(amg_data);
    local_size = hypre_CSRMatrixNumRows(hypre_ParCSRMatrixDiag(A));
    first_local_row = hypre_ParCSRMatrixFirstRowIndex(A);
+
+   setup_debug_level = hypre_BoomerAMGSetupDebugLevel();
+   setup_debug_print = hypre_BoomerAMGSetupDebugShouldPrint(setup_debug_level, my_id);
+   if (setup_debug_print)
+   {
+      setup_debug_start_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGSetup enter: global_rows=%b local_rows=%d nnz=%e max_levels=%d coarsen_type=%d interp_type=%d relax=(%d,%d,%d) coarse_threshold=%d min_coarse_size=%d strong_threshold=%e\n",
+                   my_id, hypre_ParCSRMatrixGlobalNumRows(A), local_size,
+                   hypre_ParCSRMatrixDNumNonzeros(A), max_levels, coarsen_type,
+                   interp_type, grid_relax_type[0], grid_relax_type[1],
+                   grid_relax_type[3], coarse_threshold, min_coarse_size,
+                   hypre_ParAMGDataStrongThreshold(amg_data));
+   }
 
    /* set size of dof_func hypre_IntArray if necessary */
    if (dof_func && hypre_IntArraySize(dof_func) < 0)
@@ -949,6 +988,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    strong_threshold = hypre_ParAMGDataStrongThreshold(amg_data);
    coarsen_cut_factor = hypre_ParAMGDataCoarsenCutFactor(amg_data);
    useSabs = hypre_ParAMGDataSabs(amg_data);
+   use_coarsen_symmetric_strength = hypre_ParAMGDataCoarsenSymmetricStrength(amg_data);
    CR_strong_th = hypre_ParAMGDataCRStrongTh(amg_data);
    max_row_sum = hypre_ParAMGDataMaxRowSum(amg_data);
    trunc_factor = hypre_ParAMGDataTruncFactor(amg_data);
@@ -984,6 +1024,12 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
       else
       {
          fine_size = hypre_ParCSRMatrixGlobalNumRows(A_array[level]);
+      }
+
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d begin: fine_size=%b\n",
+                      my_id, level, fine_size);
       }
 
       if (level > 0)
@@ -1072,6 +1118,12 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
          }
 
          /**** Get the Strength Matrix ****/
+         if (setup_debug_print)
+         {
+            setup_debug_phase_time = time_getWallclockSeconds();
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d strength matrix begin\n",
+                         my_id, level);
+         }
          if (hypre_ParAMGDataGSMG(amg_data) == 0)
          {
             if (nodal) /* if we are solving systems and
@@ -1132,12 +1184,47 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
                hypre_BoomerAMGCreateSabs(A_array[level], strong_thresholdR, 1.0,
                                          1, NULL, &Sabs);
             }
+
+            if (use_coarsen_symmetric_strength && S && nodal == 0)
+            {
+#if defined(HYPRE_USING_GPU)
+               HYPRE_ExecutionPolicy exec = hypre_GetExecPolicy1(
+                                                hypre_ParCSRMatrixMemoryLocation(A_array[level]));
+               if (exec == HYPRE_EXEC_DEVICE)
+               {
+                  if (setup_debug_print)
+                  {
+                     hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d symmetric coarsening strength ignored on device backend\n",
+                                  my_id, level);
+                  }
+               }
+               else
+#endif
+               {
+                  hypre_ParCSRMatrix *S_transpose = NULL;
+
+                  hypre_ParCSRMatrixTranspose(S, &S_transpose, 0);
+                  S_coarsen = hypre_ParCSRMatrixUnion(S, S_transpose);
+                  hypre_ParCSRMatrixDestroy(S_transpose);
+
+                  if (setup_debug_print)
+                  {
+                     hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d using S union S^T for coarsening only\n",
+                                  my_id, level);
+                  }
+               }
+            }
          }
          else
          {
             hypre_BoomerAMGCreateSmoothDirs(amg_data, A_array[level],
                                             SmoothVecs, strong_threshold,
                                             num_functions, dof_func_data, &S);
+         }
+         if (setup_debug_print)
+         {
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d strength matrix done: %.6f s\n",
+                         my_id, level, time_getWallclockSeconds() - setup_debug_phase_time);
          }
 
          /* Allocate CF_marker for the current level */
@@ -1200,23 +1287,31 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
 
          /**** Do the appropriate coarsening ****/
          HYPRE_ANNOTATE_REGION_BEGIN("%s", "Coarsening");
+         if (setup_debug_print)
+         {
+            setup_debug_phase_time = time_getWallclockSeconds();
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d coarsening begin\n",
+                         my_id, level);
+         }
 
          if (nodal == 0) /* no nodal coarsening */
          {
+            hypre_ParCSRMatrix *S_for_coarsening = S_coarsen ? S_coarsen : S;
+
             if (coarsen_type == 6)
-               hypre_BoomerAMGCoarsenFalgout(S, A_array[level], measure_type,
+               hypre_BoomerAMGCoarsenFalgout(S_for_coarsening, A_array[level], measure_type,
                                              coarsen_cut_factor, debug_flag, &(CF_marker_array[level]));
             else if (coarsen_type == 7)
-               hypre_BoomerAMGCoarsen(S, A_array[level], 2,
+               hypre_BoomerAMGCoarsen(S_for_coarsening, A_array[level], 2,
                                       debug_flag, &(CF_marker_array[level]));
             else if (coarsen_type == 8)
-               hypre_BoomerAMGCoarsenPMIS(S, A_array[level], 0,
+               hypre_BoomerAMGCoarsenPMIS(S_for_coarsening, A_array[level], 0,
                                           debug_flag, &(CF_marker_array[level]));
             else if (coarsen_type == 9)
-               hypre_BoomerAMGCoarsenPMIS(S, A_array[level], 2,
+               hypre_BoomerAMGCoarsenPMIS(S_for_coarsening, A_array[level], 2,
                                           debug_flag, &(CF_marker_array[level]));
             else if (coarsen_type == 10)
-               hypre_BoomerAMGCoarsenHMIS(S, A_array[level], measure_type,
+               hypre_BoomerAMGCoarsenHMIS(S_for_coarsening, A_array[level], measure_type,
                                           coarsen_cut_factor, debug_flag, &(CF_marker_array[level]));
             else if (coarsen_type == 21 || coarsen_type == 22)
             {
@@ -1224,7 +1319,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
                hypre_error_w_msg(HYPRE_ERROR_GENERIC, "CGC coarsening is not available in mixedint mode!");
                return hypre_error_flag;
 #endif
-               hypre_BoomerAMGCoarsenCGCb(S, A_array[level], measure_type, coarsen_type,
+               hypre_BoomerAMGCoarsenCGCb(S_for_coarsening, A_array[level], measure_type, coarsen_type,
                                           cgc_its, debug_flag, &(CF_marker_array[level]));
             }
             else if (coarsen_type == 98)
@@ -1244,7 +1339,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
             }
             else if (coarsen_type)
             {
-               hypre_BoomerAMGCoarsenRuge(S, A_array[level], measure_type, coarsen_type,
+               hypre_BoomerAMGCoarsenRuge(S_for_coarsening, A_array[level], measure_type, coarsen_type,
                                           coarsen_cut_factor, debug_flag, &(CF_marker_array[level]));
                /* DEBUG: SAVE CF the splitting
                HYPRE_Int my_id;
@@ -1274,7 +1369,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
             }
             else
             {
-               hypre_BoomerAMGCoarsen(S, A_array[level], 0,
+               hypre_BoomerAMGCoarsen(S_for_coarsening, A_array[level], 0,
                                       debug_flag, &(CF_marker_array[level]));
             }
 
@@ -1283,7 +1378,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
                hypre_BoomerAMGCoarseParms(comm, local_num_vars,
                                           1, dof_func_array[level], CF_marker_array[level],
                                           &coarse_dof_func, coarse_pnts_global1);
-               hypre_BoomerAMGCreate2ndS(S, CF_marker, num_paths,
+               hypre_BoomerAMGCreate2ndS(S_for_coarsening, CF_marker, num_paths,
                                          coarse_pnts_global1, &S2);
                if (coarsen_type == 10)
                {
@@ -1446,6 +1541,12 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
                hypre_ParCSRMatrixDestroy(AN);
                AN = NULL;
             }
+         }
+
+         if (S_coarsen)
+         {
+            hypre_ParCSRMatrixDestroy(S_coarsen);
+            S_coarsen = NULL;
          }
 
          /**************************************************/
@@ -1710,9 +1811,31 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
 
          hypre_GpuProfilingPopRange();
 
+         if (setup_debug_print)
+         {
+            if (level < agg_num_levels)
+            {
+               hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d aggressive coarsening done: coarse_size pending until RAP %.6f s\n",
+                            my_id, level,
+                            time_getWallclockSeconds() - setup_debug_phase_time);
+            }
+            else
+            {
+               hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d coarsening done: coarse_size=%b %.6f s\n",
+                            my_id, level, coarse_size,
+                            time_getWallclockSeconds() - setup_debug_phase_time);
+            }
+         }
+
          /*****xxxxxxxxxxxxx changes for min_coarse_size  end */
          HYPRE_ANNOTATE_REGION_END("%s", "Coarsening");
          HYPRE_ANNOTATE_REGION_BEGIN("%s", "Interpolation");
+         if (setup_debug_print)
+         {
+            setup_debug_phase_time = time_getWallclockSeconds();
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d interpolation begin\n",
+                         my_id, level);
+         }
 
          if (level < agg_num_levels)
          {
@@ -2945,6 +3068,11 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
                       my_id, level, wall_time);
          fflush(NULL);
       }
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d interpolation done: %.6f s\n",
+                      my_id, level, time_getWallclockSeconds() - setup_debug_phase_time);
+      }
 
       /*-------------------------------------------------------------
        * Build coarse-grid operator, A_array[level+1] by R*A*P
@@ -2952,6 +3080,12 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
 
       HYPRE_ANNOTATE_REGION_BEGIN("%s", "RAP");
       if (debug_flag == 1) { wall_time = time_getWallclockSeconds(); }
+      if (setup_debug_print)
+      {
+         setup_debug_phase_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d RAP/coarse operator begin\n",
+                      my_id, level);
+      }
 
       if (block_mode)
       {
@@ -3091,6 +3225,14 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
                       my_id, level, wall_time);
          fflush(NULL);
       }
+      if (setup_debug_print)
+      {
+         hypre_ParCSRMatrixSetDNumNonzeros(A_H);
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d RAP/coarse operator done: coarse_rows=%b nnz=%e %.6f s\n",
+                      my_id, level, hypre_ParCSRMatrixGlobalNumRows(A_H),
+                      hypre_ParCSRMatrixDNumNonzeros(A_H),
+                      time_getWallclockSeconds() - setup_debug_phase_time);
+      }
 
       HYPRE_ANNOTATE_MGLEVEL_END(level);
       hypre_GpuProfilingPopRange();
@@ -3116,6 +3258,17 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
             hypre_ParCSRMatrixSetDNumNonzeros(A_H);
          }
          A_array[level] = A_H;
+
+         /* Aggressive coarsening does not set coarse_size in the regular
+          * CheckMinSize path above.  Use the actual coarse operator size
+          * before the stopping and coarsen-type fallback logic below.
+          */
+         coarse_size = hypre_ParCSRMatrixGlobalNumRows(A_H);
+         if (setup_debug_print && (level - 1 < agg_num_levels))
+         {
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d coarse_size reset from coarse operator: coarse_size=%b\n",
+                         my_id, level - 1, coarse_size);
+         }
       }
 
       size = ((HYPRE_Real) fine_size ) * .75;
@@ -3137,6 +3290,12 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    }  /* end of coarsening loop: while (not_finished_coarsening) */
 
    HYPRE_ANNOTATE_REGION_BEGIN("%s", "Coarse solve");
+   if (setup_debug_print)
+   {
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] coarse solve setup begin: level=%d coarse_size=%b relax_coarse=%d\n",
+                   my_id, level, coarse_size, grid_relax_type[3]);
+   }
 
    /* redundant coarse grid solve */
    if ((seq_threshold >= coarse_threshold) &&
@@ -3177,6 +3336,11 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
       }
    }
    HYPRE_ANNOTATE_REGION_END("%s", "Coarse solve");
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] coarse solve setup done: %.6f s\n",
+                   my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+   }
    HYPRE_ANNOTATE_MGLEVEL_END(level);
    hypre_GpuProfilingPopRange();
 
@@ -3462,6 +3626,12 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    {
       HYPRE_ANNOTATE_MGLEVEL_BEGIN(j);
       HYPRE_ANNOTATE_REGION_BEGIN("%s", "Relaxation");
+      if (setup_debug_print)
+      {
+         setup_debug_phase_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] relaxation setup begin: level=%d rows=%b\n",
+                      my_id, j, hypre_ParCSRMatrixGlobalNumRows(A_array[j]));
+      }
       hypre_sprintf(nvtx_name, "%s-%d", "AMG Level", level);
       hypre_GpuProfilingPushRange(nvtx_name);
 
@@ -3771,6 +3941,11 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
       }
 
       HYPRE_ANNOTATE_REGION_END("%s", "Relaxation");
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] relaxation setup done: level=%d %.6f s\n",
+                      my_id, j, time_getWallclockSeconds() - setup_debug_phase_time);
+      }
       HYPRE_ANNOTATE_MGLEVEL_END(j);
       hypre_GpuProfilingPopRange();
       hypre_GpuProfilingPopRange();
@@ -3818,6 +3993,12 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    if (amg_print_level == 1 || amg_print_level == 3)
    {
       hypre_BoomerAMGSetupStats(amg_data, A);
+   }
+
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGSetup done: levels=%d total=%.6f s\n",
+                   my_id, num_levels, time_getWallclockSeconds() - setup_debug_start_time);
    }
 
    /* print out CF info to plot grids in matlab (see 'tools/AMGgrids.m') */

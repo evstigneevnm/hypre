@@ -8,6 +8,26 @@
 #include "_hypre_parcsr_ls.h"
 #include "_hypre_utilities.h"
 
+static HYPRE_Int
+hypre_BoomerAMGDDSetupDebugLevel( void )
+{
+   const char *env = getenv("HYPRE_BAMG_SETUP_DEBUG");
+
+   if (!env || !env[0])
+   {
+      return 0;
+   }
+
+   return hypre_max(atoi(env), 0);
+}
+
+static HYPRE_Int
+hypre_BoomerAMGDDSetupDebugShouldPrint( HYPRE_Int debug_level,
+                                        HYPRE_Int my_id )
+{
+   return (debug_level > 1) || (debug_level == 1 && my_id == 0);
+}
+
 /*****************************************************************************
  *
  * Routine for setting up the composite grids in AMG-DD
@@ -59,9 +79,14 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
    HYPRE_Int               num_procs;
    HYPRE_Int               num_send_procs;
    HYPRE_Int               num_recv_procs;
+   HYPRE_Int               my_id;
    HYPRE_Int               level, i, j;
    HYPRE_Int               num_requests;
    HYPRE_Int               request_counter;
+   HYPRE_Int               setup_debug_level;
+   HYPRE_Int               setup_debug_print;
+   HYPRE_Real              setup_debug_start_time = 0.0;
+   HYPRE_Real              setup_debug_phase_time = 0.0;
 
    /* Sanity check */
    if (hypre_ParVectorNumVectors(b) > 1)
@@ -70,15 +95,37 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
       return hypre_error_flag;
    }
 
-   // If the underlying AMG data structure has not yet been set up, call BoomerAMGSetup()
-   if (!hypre_ParAMGDataAArray(amg_data))
-   {
-      hypre_BoomerAMGSetup((void*) amg_data, A, b, x);
-   }
-
    // Get number of processes
    comm = hypre_ParCSRMatrixComm(A);
    hypre_MPI_Comm_size(comm, &num_procs);
+   hypre_MPI_Comm_rank(comm, &my_id);
+
+   setup_debug_level = hypre_BoomerAMGDDSetupDebugLevel();
+   setup_debug_print = hypre_BoomerAMGDDSetupDebugShouldPrint(setup_debug_level, my_id);
+   if (setup_debug_print)
+   {
+      setup_debug_start_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup enter: global_rows=%b local_rows=%d num_procs=%d\n",
+                   my_id, hypre_ParCSRMatrixGlobalNumRows(A),
+                   hypre_CSRMatrixNumRows(hypre_ParCSRMatrixDiag(A)), num_procs);
+   }
+
+   // If the underlying AMG data structure has not yet been set up, call BoomerAMGSetup()
+   if (!hypre_ParAMGDataAArray(amg_data))
+   {
+      if (setup_debug_print)
+      {
+         setup_debug_phase_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup underlying BoomerAMGSetup begin\n",
+                      my_id);
+      }
+      hypre_BoomerAMGSetup((void*) amg_data, A, b, x);
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup underlying BoomerAMGSetup done: %.6f s\n",
+                      my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+      }
+   }
 
    // get info from amg about how to setup amgdd
    A_array           = hypre_ParAMGDataAArray(amg_data);
@@ -91,6 +138,11 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
       amgdd_start_level = num_levels - 2;
       hypre_ParAMGDDDataStartLevel(amgdd_data) = amgdd_start_level;
    }
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup composite-grid parameters: levels=%d start_level=%d padding=%d ghost_layers=%d\n",
+                   my_id, num_levels, amgdd_start_level, pad, num_ghost_layers);
+   }
 
    // Allocate pointer for the composite grids
    compGrid = hypre_CTAlloc(hypre_AMGDDCompGrid *, num_levels, HYPRE_MEMORY_HOST);
@@ -99,13 +151,34 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
    // In the 1 processor case, just need to initialize the comp grids
    if (num_procs == 1)
    {
+      if (setup_debug_print)
+      {
+         setup_debug_phase_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup serial comp-grid initialize begin\n",
+                      my_id);
+      }
       for (level = amgdd_start_level; level < num_levels; level++)
       {
          compGrid[level] = hypre_AMGDDCompGridCreate();
          hypre_AMGDDCompGridInitialize(amgdd_data, 0, level);
       }
       hypre_AMGDDCompGridFinalize(amgdd_data);
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup serial comp-grid initialize done: %.6f s\n",
+                      my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+         setup_debug_phase_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup comp-grid relax setup begin\n",
+                      my_id);
+      }
       hypre_AMGDDCompGridSetupRelax(amgdd_data);
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup comp-grid relax setup done: %.6f s\n",
+                      my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup done: total=%.6f s\n",
+                      my_id, time_getWallclockSeconds() - setup_debug_start_time);
+      }
 
       return hypre_error_flag;
    }
@@ -118,10 +191,21 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
    }
 
    // Initialize composite grid structures
+   if (setup_debug_print)
+   {
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup comp-grid initialize begin\n",
+                   my_id);
+   }
    for (level = amgdd_start_level; level < num_levels; level++)
    {
       compGrid[level] = hypre_AMGDDCompGridCreate();
       hypre_AMGDDCompGridInitialize(amgdd_data, padding[level], level);
+   }
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup comp-grid initialize done: %.6f s\n",
+                   my_id, time_getWallclockSeconds() - setup_debug_phase_time);
    }
 
    // Create the compGridCommPkg and grab a few frequently used variables
@@ -138,6 +222,12 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
    nodes_added_on_level = hypre_CTAlloc(HYPRE_Int, num_levels, HYPRE_MEMORY_HOST);
 
    // On each level, setup the compGridCommPkg so that it has communication info for distance (eta + numGhostLayers)
+   if (setup_debug_print)
+   {
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup nearest-neighbor package begin\n",
+                   my_id);
+   }
    for (level = amgdd_start_level; level < num_levels; level++)
    {
       hypre_BoomerAMGDD_SetupNearestProcessorNeighbors(A_array[level],
@@ -145,6 +235,11 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
                                                        level,
                                                        padding,
                                                        num_ghost_layers);
+   }
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup nearest-neighbor package done: %.6f s\n",
+                   my_id, time_getWallclockSeconds() - setup_debug_phase_time);
    }
 
    // Find maximum number of requests and allocate memory
@@ -171,6 +266,12 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
       num_send_procs = hypre_AMGDDCommPkgNumSendProcs(compGridCommPkg)[level];
       num_recv_procs = hypre_AMGDDCommPkgNumRecvProcs(compGridCommPkg)[level];
       num_requests   = num_send_procs + num_recv_procs;
+      if (setup_debug_print)
+      {
+         setup_debug_phase_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup level %d begin: send_procs=%d recv_procs=%d requests=%d\n",
+                      my_id, level, num_send_procs, num_recv_procs, num_requests);
+      }
 
       // Initialize request counter
       request_counter = 0;
@@ -314,6 +415,11 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
          hypre_TFree(recv_map_send_buffer, HYPRE_MEMORY_HOST);
          hypre_TFree(recv_map_send_buffer_size, HYPRE_MEMORY_HOST);
       }
+      if (setup_debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup level %d done: %.6f s\n",
+                      my_id, level, time_getWallclockSeconds() - setup_debug_phase_time);
+      }
    }
 
    /////////////////////////////////////////////////////////////////
@@ -322,19 +428,64 @@ hypre_BoomerAMGDDSetup( void               *amgdd_vdata,
 
    /////////////////////////////////////////////////////////////////
 
+   if (setup_debug_print)
+   {
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup fix recv maps begin\n",
+                   my_id);
+   }
    hypre_BoomerAMGDD_FixUpRecvMaps(compGrid, compGridCommPkg, amgdd_start_level, num_levels);
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup fix recv maps done: %.6f s\n",
+                   my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup communicate remaining matrix info begin\n",
+                   my_id);
+   }
 
    // Communicate data for A and all info for P
    hypre_BoomerAMGDD_CommunicateRemainingMatrixInfo(amgdd_data);
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup communicate remaining matrix info done: %.6f s\n",
+                   my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup setup local P indices begin\n",
+                   my_id);
+   }
 
    // Setup the local indices for P
    hypre_AMGDDCompGridSetupLocalIndicesP(amgdd_data);
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup setup local P indices done: %.6f s\n",
+                   my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup finalize comp grids begin\n",
+                   my_id);
+   }
 
    // Finalize the comp grid structures
    hypre_AMGDDCompGridFinalize(amgdd_data);
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup finalize comp grids done: %.6f s\n",
+                   my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+      setup_debug_phase_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup comp-grid relax setup begin\n",
+                   my_id);
+   }
 
    // Setup extra info for specific relaxation methods
    hypre_AMGDDCompGridSetupRelax(amgdd_data);
+   if (setup_debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup comp-grid relax setup done: %.6f s\n",
+                   my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] BoomerAMGDDSetup done: total=%.6f s\n",
+                   my_id, time_getWallclockSeconds() - setup_debug_start_time);
+   }
 
    // Cleanup memory
    hypre_TFree(padding, HYPRE_MEMORY_HOST);

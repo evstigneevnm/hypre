@@ -13,6 +13,41 @@
 
 #if defined(HYPRE_USING_GPU)
 
+static HYPRE_Int
+hypre_RAPKTDeviceDebugLevel( void )
+{
+   const char *env = getenv("HYPRE_BAMG_SETUP_DEBUG");
+
+   if (!env || !env[0])
+   {
+      return 0;
+   }
+
+   return hypre_max(atoi(env), 0);
+}
+
+static HYPRE_Int
+hypre_RAPKTDeviceDebugShouldPrint( HYPRE_Int debug_level,
+                                   HYPRE_Int my_id )
+{
+   return (debug_level > 1) || (debug_level == 1 && my_id == 0);
+}
+
+static void
+hypre_RAPKTDeviceDebugDone( HYPRE_Int  debug_print,
+                            HYPRE_Int  my_id,
+                            const char *message,
+                            HYPRE_Real elapsed )
+{
+   if (debug_print)
+   {
+      hypre_ForceSyncComputeStream(hypre_handle());
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice %s: %.6f s\n",
+                   my_id, message, elapsed);
+      fflush(NULL);
+   }
+}
+
 /* option == 1, T = HYPRE_BigInt
  * option == 2, T = HYPRE_Int,
  */
@@ -629,8 +664,31 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
    HYPRE_BigInt        *col_map_offd_C = NULL;
 
    HYPRE_Int            num_procs;
+   HYPRE_Int            my_id = 0;
+   HYPRE_Int            debug_level = 0;
+   HYPRE_Int            debug_print = 0;
+   HYPRE_Real           debug_time = 0.0;
 
    hypre_MPI_Comm_size(comm, &num_procs);
+   hypre_MPI_Comm_rank(comm, &my_id);
+   debug_level = hypre_RAPKTDeviceDebugLevel();
+   debug_print = hypre_RAPKTDeviceDebugShouldPrint(debug_level, my_id);
+
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice enter: R_rows=%b A_rows=%b P_rows=%b R_local_rows=%d A_local_rows=%d P_local_rows=%d R_nnz=%e A_nnz=%e P_nnz=%e\n",
+                   my_id,
+                   hypre_ParCSRMatrixGlobalNumRows(R),
+                   hypre_ParCSRMatrixGlobalNumRows(A),
+                   hypre_ParCSRMatrixGlobalNumRows(P),
+                   hypre_ParCSRMatrixNumRows(R),
+                   hypre_ParCSRMatrixNumRows(A),
+                   hypre_ParCSRMatrixNumRows(P),
+                   hypre_ParCSRMatrixDNumNonzeros(R),
+                   hypre_ParCSRMatrixDNumNonzeros(A),
+                   hypre_ParCSRMatrixDNumNonzeros(P));
+      fflush(NULL);
+   }
 
    if ( hypre_ParCSRMatrixGlobalNumRows(R) != hypre_ParCSRMatrixGlobalNumRows(A) ||
         hypre_ParCSRMatrixGlobalNumCols(A) != hypre_ParCSRMatrixGlobalNumRows(P) )
@@ -655,10 +713,32 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
       HYPRE_Int num_cols_offd, local_nnz_Cbar;
       HYPRE_BigInt *col_map_offd;
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice Pext init begin\n", my_id);
+         fflush(NULL);
+      }
       hypre_ParCSRMatrixExtractBExtDeviceInit(P, A, 1, &request);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "Pext init done",
+                                 time_getWallclockSeconds() - debug_time);
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice Abar concat begin\n", my_id);
+         fflush(NULL);
+      }
       Abar = hypre_ConcatDiagAndOffdDevice(A);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "Abar concat done",
+                                 time_getWallclockSeconds() - debug_time);
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice R transpose begin\n", my_id);
+         fflush(NULL);
+      }
       if (hypre_ParCSRMatrixDiagT(R))
       {
          R_diagT = hypre_ParCSRMatrixDiagT(R);
@@ -676,8 +756,18 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
       {
          hypre_CSRMatrixTransposeDevice(R_offd, &R_offdT, 1);
       }
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "R transpose done",
+                                 time_getWallclockSeconds() - debug_time);
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice RbarT stack begin\n", my_id);
+         fflush(NULL);
+      }
       RbarT = hypre_CSRMatrixStack2Device(R_diagT, R_offdT);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "RbarT stack done",
+                                 time_getWallclockSeconds() - debug_time);
 
       if (!hypre_ParCSRMatrixDiagT(R))
       {
@@ -703,11 +793,36 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
          }
       }
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice Pext wait begin\n", my_id);
+         fflush(NULL);
+      }
       Pext = hypre_ParCSRMatrixExtractBExtDeviceWait(request);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "Pext wait done",
+                                 time_getWallclockSeconds() - debug_time);
+
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice Pbar concat begin\n", my_id);
+         fflush(NULL);
+      }
       hypre_ConcatDiagOffdAndExtDevice(P, Pext, &Pbar, &num_cols_offd, &col_map_offd);
       hypre_CSRMatrixDestroy(Pext);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "Pbar concat done",
+                                 time_getWallclockSeconds() - debug_time);
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice triple multiply begin\n", my_id);
+         fflush(NULL);
+      }
       Cbar = hypre_CSRMatrixTripleMultiplyDevice(RbarT, Abar, Pbar);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "triple multiply done",
+                                 time_getWallclockSeconds() - debug_time);
 
       hypre_CSRMatrixDestroy(RbarT);
       hypre_CSRMatrixDestroy(Abar);
@@ -718,9 +833,17 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
       hypre_assert(hypre_CSRMatrixNumCols(Cbar) ==
                    hypre_ParCSRMatrixNumCols(P) + num_cols_offd);
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice local nnz read begin\n", my_id);
+         fflush(NULL);
+      }
       hypre_TMemcpy(&local_nnz_Cbar,
                     hypre_CSRMatrixI(Cbar) + hypre_ParCSRMatrixNumCols(R),
                     HYPRE_Int, 1, HYPRE_MEMORY_HOST, HYPRE_MEMORY_DEVICE);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "local nnz read done",
+                                 time_getWallclockSeconds() - debug_time);
 
       // Cint is the bottom part of Cbar
       Cint = hypre_CSRMatrixCreate(hypre_CSRMatrixNumCols(R_offd), hypre_CSRMatrixNumCols(Cbar),
@@ -729,6 +852,12 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
       hypre_CSRMatrixOwnsData(Cint) = 0;
 
       hypre_CSRMatrixI(Cint) = hypre_CSRMatrixI(Cbar) + hypre_ParCSRMatrixNumCols(R);
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice Cint rowptr shift begin\n", my_id);
+         fflush(NULL);
+      }
 #if defined(HYPRE_USING_SYCL)
       HYPRE_ONEDPL_CALL( std::transform,
                          hypre_CSRMatrixI(Cint),
@@ -743,6 +872,8 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
                          hypre_CSRMatrixI(Cint),
                          thrust::minus<HYPRE_Int>() );
 #endif
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "Cint rowptr shift done",
+                                 time_getWallclockSeconds() - debug_time);
 
       // Change Cint into a BigJ matrix
       // RL: TODO FIX the 'big' num of columns to global size
@@ -753,6 +884,12 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
       RAP_functor<1, HYPRE_BigInt> func1(hypre_ParCSRMatrixNumCols(P),
                                          hypre_ParCSRMatrixFirstColDiag(P),
                                          col_map_offd);
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice Cint bigJ transform begin\n", my_id);
+         fflush(NULL);
+      }
 #if defined(HYPRE_USING_SYCL)
       HYPRE_ONEDPL_CALL( std::transform,
                          hypre_CSRMatrixJ(Cbar) + local_nnz_Cbar,
@@ -766,6 +903,8 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
                          hypre_CSRMatrixBigJ(Cint),
                          func1 );
 #endif
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "Cint bigJ transform done",
+                                 time_getWallclockSeconds() - debug_time);
 
 #if defined(HYPRE_WITH_GPU_AWARE_MPI) && defined(HYPRE_USING_THRUST_NOSYNC)
       /* RL: make sure Cint is ready before issuing GPU-GPU MPI */
@@ -774,17 +913,39 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
 
       hypre_CSRMatrixData(Cint) = hypre_CSRMatrixData(Cbar) + local_nnz_Cbar;
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice Cint exchange begin\n", my_id);
+         fflush(NULL);
+      }
       hypre_ExchangeExternalRowsDeviceInit(Cint, hypre_ParCSRMatrixCommPkg(R), 1, &request);
       Cext = hypre_ExchangeExternalRowsDeviceWait(request);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "Cint exchange done",
+                                 time_getWallclockSeconds() - debug_time);
 
       hypre_TFree(hypre_CSRMatrixBigJ(Cint), HYPRE_MEMORY_DEVICE);
       hypre_TFree(Cint, HYPRE_MEMORY_HOST);
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice Cbar rowptr restore begin\n", my_id);
+         fflush(NULL);
+      }
       hypre_TMemcpy(hypre_CSRMatrixI(Cbar) + hypre_ParCSRMatrixNumCols(R),
                     &local_nnz_Cbar, HYPRE_Int, 1,
                     HYPRE_MEMORY_DEVICE, HYPRE_MEMORY_HOST);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "Cbar rowptr restore done",
+                                 time_getWallclockSeconds() - debug_time);
 
       /* add Cext to local part of Cbar */
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice partial add begin\n", my_id);
+         fflush(NULL);
+      }
       hypre_ParCSRTMatMatPartialAddDevice(hypre_ParCSRMatrixCommPkg(R),
                                           hypre_ParCSRMatrixNumCols(R),
                                           hypre_ParCSRMatrixNumCols(P),
@@ -799,6 +960,8 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
                                           &C_offd,
                                           &num_cols_offd_C,
                                           &col_map_offd_C);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "partial add done",
+                                 time_getWallclockSeconds() - debug_time);
 
       hypre_TFree(col_map_offd, HYPRE_MEMORY_DEVICE);
    }
@@ -818,7 +981,15 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
          hypre_CSRMatrixTransposeDevice(R_diag, &R_diagT, 1);
       }
 
+      if (debug_print)
+      {
+         debug_time = time_getWallclockSeconds();
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice single-rank triple multiply begin\n", my_id);
+         fflush(NULL);
+      }
       C_diag = hypre_CSRMatrixTripleMultiplyDevice(R_diagT, A_diag, P_diag);
+      hypre_RAPKTDeviceDebugDone(debug_print, my_id, "single-rank triple multiply done",
+                                 time_getWallclockSeconds() - debug_time);
       C_offd = hypre_CSRMatrixCreate(hypre_ParCSRMatrixNumCols(R), 0, 0);
       hypre_CSRMatrixInitialize_v2(C_offd, 0, HYPRE_MEMORY_DEVICE);
 
@@ -837,7 +1008,15 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
    }
 
    /* Move the diagonal entry to the first of each row */
+   if (debug_print)
+   {
+      debug_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice move diag first begin\n", my_id);
+      fflush(NULL);
+   }
    hypre_CSRMatrixMoveDiagFirstDevice(C_diag);
+   hypre_RAPKTDeviceDebugDone(debug_print, my_id, "move diag first done",
+                              time_getWallclockSeconds() - debug_time);
 
    C = hypre_ParCSRMatrixCreate(hypre_ParCSRMatrixComm(A),
                                 hypre_ParCSRMatrixGlobalNumCols(R),
@@ -856,12 +1035,40 @@ hypre_ParCSRMatrixRAPKTDevice( hypre_ParCSRMatrix *R,
 
    hypre_ParCSRMatrixDeviceColMapOffd(C) = col_map_offd_C;
 
+   if (debug_print)
+   {
+      debug_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice compress offd map begin\n", my_id);
+      fflush(NULL);
+   }
    hypre_ParCSRMatrixCompressOffdMapDevice(C);
+   hypre_RAPKTDeviceDebugDone(debug_print, my_id, "compress offd map done",
+                              time_getWallclockSeconds() - debug_time);
+
+   if (debug_print)
+   {
+      debug_time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice copy offd map to host begin\n", my_id);
+      fflush(NULL);
+   }
    hypre_ParCSRMatrixCopyColMapOffdToHost(C);
+   hypre_RAPKTDeviceDebugDone(debug_print, my_id, "copy offd map to host done",
+                              time_getWallclockSeconds() - debug_time);
 
    hypre_assert(!hypre_CSRMatrixCheckDiagFirstDevice(hypre_ParCSRMatrixDiag(C)));
 
    hypre_SyncComputeStream(hypre_handle());
+
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPKTDevice done: C_rows=%b C_local_rows=%d C_diag_nnz=%d C_offd_nnz=%d\n",
+                   my_id,
+                   hypre_ParCSRMatrixGlobalNumRows(C),
+                   hypre_ParCSRMatrixNumRows(C),
+                   hypre_CSRMatrixNumNonzeros(hypre_ParCSRMatrixDiag(C)),
+                   hypre_CSRMatrixNumNonzeros(hypre_ParCSRMatrixOffd(C)));
+      fflush(NULL);
+   }
 
    return C;
 }

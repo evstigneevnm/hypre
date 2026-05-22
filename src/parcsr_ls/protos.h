@@ -410,6 +410,7 @@ HYPRE_Int HYPRE_BoomerAMGSetFilterThresholdR ( HYPRE_Solver solver, HYPRE_Real f
 HYPRE_Int HYPRE_BoomerAMGGetFilterThresholdR ( HYPRE_Solver solver, HYPRE_Real *filter_threshold );
 HYPRE_Int HYPRE_BoomerAMGSetGMRESSwitchR ( HYPRE_Solver solver, HYPRE_Int gmres_switch );
 HYPRE_Int HYPRE_BoomerAMGSetSabs ( HYPRE_Solver solver, HYPRE_Int Sabs );
+HYPRE_Int HYPRE_BoomerAMGSetCoarsenSymmetricStrength ( HYPRE_Solver solver, HYPRE_Int coarsen_symmetric_strength );
 HYPRE_Int HYPRE_BoomerAMGSetMaxRowSum ( HYPRE_Solver solver, HYPRE_Real max_row_sum );
 HYPRE_Int HYPRE_BoomerAMGGetMaxRowSum ( HYPRE_Solver solver, HYPRE_Real *max_row_sum );
 HYPRE_Int HYPRE_BoomerAMGSetTruncFactor ( HYPRE_Solver solver, HYPRE_Real trunc_factor );
@@ -1035,6 +1036,7 @@ HYPRE_Int hypre_BoomerAMGGetStrongThresholdR ( void *data, HYPRE_Real *strong_th
 HYPRE_Int hypre_BoomerAMGSetFilterThresholdR ( void *data, HYPRE_Real filter_threshold );
 HYPRE_Int hypre_BoomerAMGGetFilterThresholdR ( void *data, HYPRE_Real *filter_threshold );
 HYPRE_Int hypre_BoomerAMGSetSabs ( void *data, HYPRE_Int Sabs );
+HYPRE_Int hypre_BoomerAMGSetCoarsenSymmetricStrength ( void *data, HYPRE_Int coarsen_symmetric_strength );
 HYPRE_Int hypre_BoomerAMGSetMaxRowSum ( void *data, HYPRE_Real max_row_sum );
 HYPRE_Int hypre_BoomerAMGGetMaxRowSum ( void *data, HYPRE_Real *max_row_sum );
 HYPRE_Int hypre_BoomerAMGSetTruncFactor ( void *data, HYPRE_Real trunc_factor );

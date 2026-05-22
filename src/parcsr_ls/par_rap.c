@@ -8,6 +8,54 @@
 #include "_hypre_parcsr_ls.h"
 #include "_hypre_utilities.h"
 
+static HYPRE_Int
+hypre_RAPHostDebugLevel( void )
+{
+   const char *env = getenv("HYPRE_BAMG_SETUP_DEBUG");
+
+   if (!env || !env[0])
+   {
+      return 0;
+   }
+
+   return hypre_max(atoi(env), 0);
+}
+
+static HYPRE_Int
+hypre_RAPHostDebugShouldPrint( HYPRE_Int debug_level,
+                               HYPRE_Int my_id )
+{
+   return (debug_level > 1) || (debug_level == 1 && my_id == 0);
+}
+
+static void
+hypre_RAPHostDebugBegin( HYPRE_Int  debug_print,
+                         HYPRE_Int  my_id,
+                         const char *message,
+                         HYPRE_Real *time )
+{
+   if (debug_print)
+   {
+      *time = time_getWallclockSeconds();
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost %s begin\n", my_id, message);
+      fflush(NULL);
+   }
+}
+
+static void
+hypre_RAPHostDebugDone( HYPRE_Int  debug_print,
+                        HYPRE_Int  my_id,
+                        const char *message,
+                        HYPRE_Real elapsed )
+{
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost %s done: %.6f s\n",
+                   my_id, message, elapsed);
+      fflush(NULL);
+   }
+}
+
 /*--------------------------------------------------------------------------
  * hypre_BoomerAMGBuildCoarseOperator
  *--------------------------------------------------------------------------*/
@@ -180,7 +228,11 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
    HYPRE_Int              start_indexing = 0; /* start indexing for RAP_data at 0 */
    HYPRE_Int              num_nz_cols_A;
    HYPRE_Int              num_procs;
+   HYPRE_Int              my_id;
    HYPRE_Int              num_threads;
+   HYPRE_Int              debug_level = 0;
+   HYPRE_Int              debug_print = 0;
+   HYPRE_Real             debug_time = 0.0;
 
    HYPRE_Real       r_entry;
    HYPRE_Real       r_a_product;
@@ -195,7 +247,27 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
     *-----------------------------------------------------------------------*/
 
    hypre_MPI_Comm_size(comm, &num_procs);
+   hypre_MPI_Comm_rank(comm, &my_id);
    num_threads = hypre_NumThreads();
+   debug_level = hypre_RAPHostDebugLevel();
+   debug_print = hypre_RAPHostDebugShouldPrint(debug_level, my_id);
+
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost enter: RT_rows=%b A_rows=%b P_rows=%b RT_local_rows=%d A_local_rows=%d P_local_rows=%d RT_nnz=%e A_nnz=%e P_nnz=%e threads=%d\n",
+                   my_id,
+                   hypre_ParCSRMatrixGlobalNumRows(RT),
+                   hypre_ParCSRMatrixGlobalNumRows(A),
+                   hypre_ParCSRMatrixGlobalNumRows(P),
+                   hypre_ParCSRMatrixNumRows(RT),
+                   hypre_ParCSRMatrixNumRows(A),
+                   hypre_ParCSRMatrixNumRows(P),
+                   hypre_ParCSRMatrixDNumNonzeros(RT),
+                   hypre_ParCSRMatrixDNumNonzeros(A),
+                   hypre_ParCSRMatrixDNumNonzeros(P),
+                   num_threads);
+      fflush(NULL);
+   }
 
    if (comm_pkg_RT)
    {
@@ -206,7 +278,10 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
    }
    else if (num_procs > 1)
    {
+      hypre_RAPHostDebugBegin(debug_print, my_id, "RT comm package create", &debug_time);
       hypre_MatvecCommPkgCreate(RT);
+      hypre_RAPHostDebugDone(debug_print, my_id, "RT comm package create",
+                             time_getWallclockSeconds() - debug_time);
       comm_pkg_RT = hypre_ParCSRMatrixCommPkg(RT);
       num_recvs_RT = hypre_ParCSRCommPkgNumRecvs(comm_pkg_RT);
       num_sends_RT = hypre_ParCSRCommPkgNumSends(comm_pkg_RT);
@@ -214,10 +289,16 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
       send_map_elmts_RT = hypre_ParCSRCommPkgSendMapElmts(comm_pkg_RT);
    }
 
+   hypre_RAPHostDebugBegin(debug_print, my_id, "RT_diag transpose", &debug_time);
    hypre_CSRMatrixTranspose(RT_diag, &R_diag, 1);
+   hypre_RAPHostDebugDone(debug_print, my_id, "RT_diag transpose",
+                          time_getWallclockSeconds() - debug_time);
    if (num_cols_offd_RT)
    {
+      hypre_RAPHostDebugBegin(debug_print, my_id, "RT_offd transpose", &debug_time);
       hypre_CSRMatrixTranspose(RT_offd, &R_offd, 1);
+      hypre_RAPHostDebugDone(debug_print, my_id, "RT_offd transpose",
+                             time_getWallclockSeconds() - debug_time);
       R_offd_data = hypre_CSRMatrixData(R_offd);
       R_offd_i    = hypre_CSRMatrixI(R_offd);
       R_offd_j    = hypre_CSRMatrixJ(R_offd);
@@ -323,12 +404,24 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
 
    if (num_procs > 1)
    {
+      hypre_RAPHostDebugBegin(debug_print, my_id, "Pext extract", &debug_time);
       Ps_ext = hypre_ParCSRMatrixExtractBExt(P, A, 1);
+      hypre_RAPHostDebugDone(debug_print, my_id, "Pext extract",
+                             time_getWallclockSeconds() - debug_time);
       Ps_ext_data = hypre_CSRMatrixData(Ps_ext);
       Ps_ext_i    = hypre_CSRMatrixI(Ps_ext);
       Ps_ext_j    = hypre_CSRMatrixBigJ(Ps_ext);
+      if (debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost Ps_ext: rows=%d cols=%d nnz=%d\n",
+                      my_id, hypre_CSRMatrixNumRows(Ps_ext),
+                      hypre_CSRMatrixNumCols(Ps_ext),
+                      hypre_CSRMatrixNumNonzeros(Ps_ext));
+         fflush(NULL);
+      }
    }
 
+   hypre_RAPHostDebugBegin(debug_print, my_id, "Pext split/fill", &debug_time);
    P_ext_diag_i = hypre_TAlloc(HYPRE_Int, num_cols_offd_A + 1, HYPRE_MEMORY_HOST);
    P_ext_offd_i = hypre_TAlloc(HYPRE_Int, num_cols_offd_A + 1, HYPRE_MEMORY_HOST);
    P_ext_diag_i[0] = 0;
@@ -410,6 +503,14 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
       }
    } /* omp parallel */
    hypre_TFree(prefix_sum_workspace, HYPRE_MEMORY_HOST);
+   hypre_RAPHostDebugDone(debug_print, my_id, "Pext split/fill",
+                          time_getWallclockSeconds() - debug_time);
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost Pext split/fill sizes: diag_nnz=%d offd_nnz=%d\n",
+                   my_id, P_ext_diag_size, P_ext_offd_size);
+      fflush(NULL);
+   }
 
    if (num_procs > 1)
    {
@@ -417,6 +518,7 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
       Ps_ext = NULL;
    }
 
+   hypre_RAPHostDebugBegin(debug_print, my_id, "Pext offd map build", &debug_time);
 #ifdef HYPRE_CONCURRENT_HOPSCOTCH
    if (P_ext_offd_size || num_cols_offd_P)
    {
@@ -535,6 +637,14 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
             if (cnt == num_cols_offd_P) { break; }
          }
    }
+   hypre_RAPHostDebugDone(debug_print, my_id, "Pext offd map build",
+                          time_getWallclockSeconds() - debug_time);
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost Pext offd map size: num_cols_offd_Pext=%d\n",
+                   my_id, num_cols_offd_Pext);
+      fflush(NULL);
+   }
 #ifdef HYPRE_PROFILE
    hypre_profile_times[HYPRE_TIMER_ID_RENUMBER_COLIDX] += hypre_MPI_Wtime();
    hypre_profile_times[HYPRE_TIMER_ID_RENUMBER_COLIDX_RAP] += hypre_MPI_Wtime();
@@ -550,6 +660,7 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
 
    if (num_cols_offd_RT)
    {
+      hypre_RAPHostDebugBegin(debug_print, my_id, "RAP_int exterior build", &debug_time);
       jj_count = hypre_CTAlloc(HYPRE_Int,  num_threads, HYPRE_MEMORY_HOST);
 
 #ifdef HYPRE_USING_OPENMP
@@ -1034,6 +1145,16 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
       hypre_CSRMatrixBigJ(RAP_int) = RAP_int_j;
       hypre_CSRMatrixData(RAP_int) = RAP_int_data;
       hypre_TFree(jj_count, HYPRE_MEMORY_HOST);
+      hypre_RAPHostDebugDone(debug_print, my_id, "RAP_int exterior build",
+                             time_getWallclockSeconds() - debug_time);
+      if (debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost RAP_int: rows=%d cols=%d nnz=%d\n",
+                      my_id, hypre_CSRMatrixNumRows(RAP_int),
+                      hypre_CSRMatrixNumCols(RAP_int),
+                      hypre_CSRMatrixNumNonzeros(RAP_int));
+         fflush(NULL);
+      }
    }
 
 #ifdef HYPRE_PROFILE
@@ -1045,12 +1166,23 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
    if (num_sends_RT || num_recvs_RT)
    {
       void *request;
+      hypre_RAPHostDebugBegin(debug_print, my_id, "RAP_int exchange", &debug_time);
       hypre_ExchangeExternalRowsInit(RAP_int, comm_pkg_RT, &request);
       RAP_ext = hypre_ExchangeExternalRowsWait(request);
+      hypre_RAPHostDebugDone(debug_print, my_id, "RAP_int exchange",
+                             time_getWallclockSeconds() - debug_time);
       RAP_ext_i = hypre_CSRMatrixI(RAP_ext);
       RAP_ext_j = hypre_CSRMatrixBigJ(RAP_ext);
       RAP_ext_data = hypre_CSRMatrixData(RAP_ext);
       RAP_ext_size = RAP_ext_i[hypre_CSRMatrixNumRows(RAP_ext)];
+      if (debug_print)
+      {
+         hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost RAP_ext: rows=%d cols=%d nnz=%d\n",
+                      my_id, hypre_CSRMatrixNumRows(RAP_ext),
+                      hypre_CSRMatrixNumCols(RAP_ext),
+                      hypre_CSRMatrixNumNonzeros(RAP_ext));
+         fflush(NULL);
+      }
    }
    if (num_cols_offd_RT)
    {
@@ -1058,6 +1190,7 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
       RAP_int = NULL;
    }
 
+   hypre_RAPHostDebugBegin(debug_print, my_id, "RAP offd map build", &debug_time);
    RAP_diag_i = hypre_TAlloc(HYPRE_Int,  num_cols_diag_RT + 1, memory_location_RAP);
    RAP_offd_i = hypre_TAlloc(HYPRE_Int,  num_cols_diag_RT + 1, memory_location_RAP);
 
@@ -1206,11 +1339,20 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
    hypre_profile_times[HYPRE_TIMER_ID_RENUMBER_COLIDX] += hypre_MPI_Wtime();
    hypre_profile_times[HYPRE_TIMER_ID_RENUMBER_COLIDX_RAP] += hypre_MPI_Wtime();
 #endif
+   hypre_RAPHostDebugDone(debug_print, my_id, "RAP offd map build",
+                          time_getWallclockSeconds() - debug_time);
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost RAP offd map size: num_cols_offd_RAP=%d RAP_ext_size=%d\n",
+                   my_id, num_cols_offd_RAP, RAP_ext_size);
+      fflush(NULL);
+   }
 
    /*   need to allocate new P_marker etc. and make further changes */
    /*-----------------------------------------------------------------------
     *  Initialize some stuff.
     *-----------------------------------------------------------------------*/
+   hypre_RAPHostDebugBegin(debug_print, my_id, "RAP_diag/offd sizing pass", &debug_time);
    jj_cnt_diag = hypre_CTAlloc(HYPRE_Int,  num_threads, HYPRE_MEMORY_HOST);
    jj_cnt_offd = hypre_CTAlloc(HYPRE_Int,  num_threads, HYPRE_MEMORY_HOST);
 
@@ -1494,20 +1636,29 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
 
    RAP_diag_i[num_cols_diag_RT] = jj_count_diag;
    RAP_offd_i[num_cols_diag_RT] = jj_count_offd;
+   RAP_diag_size = jj_count_diag;
+   RAP_offd_size = jj_count_offd;
+   hypre_RAPHostDebugDone(debug_print, my_id, "RAP_diag/offd sizing pass",
+                          time_getWallclockSeconds() - debug_time);
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost RAP_diag/offd sizes: diag_nnz=%d offd_nnz=%d num_cols_offd_RAP=%d\n",
+                   my_id, RAP_diag_size, RAP_offd_size, num_cols_offd_RAP);
+      fflush(NULL);
+   }
 
    /*-----------------------------------------------------------------------
     *  Allocate RAP_diag_data and RAP_diag_j arrays.
     *  Allocate RAP_offd_data and RAP_offd_j arrays.
     *-----------------------------------------------------------------------*/
 
-   RAP_diag_size = jj_count_diag;
+   hypre_RAPHostDebugBegin(debug_print, my_id, "RAP array allocation", &debug_time);
    if (RAP_diag_size)
    {
       RAP_diag_data = hypre_CTAlloc(HYPRE_Real, RAP_diag_size, memory_location_RAP);
       RAP_diag_j    = hypre_CTAlloc(HYPRE_Int,  RAP_diag_size, memory_location_RAP);
    }
 
-   RAP_offd_size = jj_count_offd;
    if (RAP_offd_size)
    {
       RAP_offd_data = hypre_CTAlloc(HYPRE_Real, RAP_offd_size, memory_location_RAP);
@@ -1527,12 +1678,15 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
       RA_offd_data_array = hypre_TAlloc(HYPRE_Real,  num_cols_offd_A * num_threads, HYPRE_MEMORY_HOST);
       RA_offd_j_array = hypre_TAlloc(HYPRE_Int,  num_cols_offd_A * num_threads, HYPRE_MEMORY_HOST);
    }
+   hypre_RAPHostDebugDone(debug_print, my_id, "RAP array allocation",
+                          time_getWallclockSeconds() - debug_time);
 
    /*-----------------------------------------------------------------------
     *  Second Pass: Fill in RAP_diag_data and RAP_diag_j.
     *  Second Pass: Fill in RAP_offd_data and RAP_offd_j.
     *-----------------------------------------------------------------------*/
 
+   hypre_RAPHostDebugBegin(debug_print, my_id, "RAP_diag/offd fill pass", &debug_time);
 #ifdef HYPRE_USING_OPENMP
    #pragma omp parallel for private(i,j,k,jcol,ii,ic,i1,i2,i3,jj1,jj2,jj3,ns,ne,size,rest,jj_count_diag,jj_count_offd,jj_row_begin_diag,jj_row_begin_offd,A_marker,P_marker,r_entry,r_a_product,r_a_p_product) HYPRE_SMP_SCHEDULE
 #endif
@@ -1919,10 +2073,13 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
       hypre_TFree(P_mark_array[ii], HYPRE_MEMORY_HOST);
       hypre_TFree(A_mark_array[ii], HYPRE_MEMORY_HOST);
    } // omp parallel for
+   hypre_RAPHostDebugDone(debug_print, my_id, "RAP_diag/offd fill pass",
+                          time_getWallclockSeconds() - debug_time);
 
    /* check if really all off-diagonal entries occurring in col_map_offd_RAP
       are represented and eliminate if necessary */
 
+   hypre_RAPHostDebugBegin(debug_print, my_id, "RAP offd map prune", &debug_time);
    P_marker = hypre_CTAlloc(HYPRE_Int, num_cols_offd_RAP, HYPRE_MEMORY_HOST);
 #ifdef HYPRE_USING_OPENMP
    #pragma omp parallel for HYPRE_SMP_SCHEDULE
@@ -1978,7 +2135,10 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
       col_map_offd_RAP = new_col_map_offd_RAP;
    }
    hypre_TFree(P_marker, HYPRE_MEMORY_HOST);
+   hypre_RAPHostDebugDone(debug_print, my_id, "RAP offd map prune",
+                          time_getWallclockSeconds() - debug_time);
 
+   hypre_RAPHostDebugBegin(debug_print, my_id, "RAP ParCSR create", &debug_time);
    RAP = hypre_ParCSRMatrixCreate(comm, n_coarse_RT, n_coarse,
                                   RT_partitioning, coarse_partitioning,
                                   num_cols_offd_RAP, RAP_diag_size,
@@ -2004,6 +2164,19 @@ hypre_BoomerAMGBuildCoarseOperatorKT( hypre_ParCSRMatrix  *RT,
    {
       /* hypre_GenerateRAPCommPkg(RAP, A); */
       hypre_MatvecCommPkgCreate(RAP);
+   }
+   hypre_RAPHostDebugDone(debug_print, my_id, "RAP ParCSR create",
+                          time_getWallclockSeconds() - debug_time);
+   if (debug_print)
+   {
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] RAPHost done: RAP_rows=%b local_rows=%d diag_nnz=%d offd_nnz=%d num_cols_offd=%d\n",
+                   my_id,
+                   hypre_ParCSRMatrixGlobalNumRows(RAP),
+                   hypre_ParCSRMatrixNumRows(RAP),
+                   hypre_CSRMatrixNumNonzeros(hypre_ParCSRMatrixDiag(RAP)),
+                   hypre_CSRMatrixNumNonzeros(hypre_ParCSRMatrixOffd(RAP)),
+                   hypre_CSRMatrixNumCols(hypre_ParCSRMatrixOffd(RAP)));
+      fflush(NULL);
    }
 
    *RAP_ptr = RAP;

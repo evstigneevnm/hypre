@@ -35,6 +35,7 @@ hypre_BoomerAMGCreate( void )
    HYPRE_Real   strong_threshold_R;
    HYPRE_Real   filter_threshold_R;
    HYPRE_Int    Sabs;
+   HYPRE_Int    coarsen_symmetric_strength;
    HYPRE_Real   max_row_sum;
    HYPRE_Real   trunc_factor;
    HYPRE_Real   agg_trunc_factor;
@@ -167,6 +168,7 @@ hypre_BoomerAMGCreate( void )
    strong_threshold_R = 0.25;
    filter_threshold_R = 0.0;
    Sabs = 0;
+   coarsen_symmetric_strength = 0;
    max_row_sum = 0.9;
    trunc_factor = 0.0;
    agg_trunc_factor = 0.0;
@@ -334,6 +336,7 @@ hypre_BoomerAMGCreate( void )
    hypre_BoomerAMGSetStrongThresholdR(amg_data, strong_threshold_R);
    hypre_BoomerAMGSetFilterThresholdR(amg_data, filter_threshold_R);
    hypre_BoomerAMGSetSabs(amg_data, Sabs);
+   hypre_BoomerAMGSetCoarsenSymmetricStrength(amg_data, coarsen_symmetric_strength);
    hypre_BoomerAMGSetMaxRowSum(amg_data, max_row_sum);
    hypre_BoomerAMGSetTruncFactor(amg_data, trunc_factor);
    hypre_BoomerAMGSetAggTruncFactor(amg_data, agg_trunc_factor);
@@ -1378,6 +1381,23 @@ hypre_BoomerAMGSetSabs( void         *data,
    }
 
    hypre_ParAMGDataSabs(amg_data) = Sabs != 0;
+
+   return hypre_error_flag;
+}
+
+HYPRE_Int
+hypre_BoomerAMGSetCoarsenSymmetricStrength( void      *data,
+                                            HYPRE_Int  coarsen_symmetric_strength )
+{
+   hypre_ParAMGData  *amg_data = (hypre_ParAMGData*) data;
+
+   if (!amg_data)
+   {
+      hypre_error_in_arg(1);
+      return hypre_error_flag;
+   }
+
+   hypre_ParAMGDataCoarsenSymmetricStrength(amg_data) = coarsen_symmetric_strength != 0;
 
    return hypre_error_flag;
 }

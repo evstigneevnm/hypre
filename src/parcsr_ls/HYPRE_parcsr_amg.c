@@ -326,6 +326,14 @@ HYPRE_BoomerAMGSetSabs( HYPRE_Solver solver,
                                     Sabs ) );
 }
 
+HYPRE_Int
+HYPRE_BoomerAMGSetCoarsenSymmetricStrength( HYPRE_Solver solver,
+                                            HYPRE_Int    coarsen_symmetric_strength )
+{
+   return ( hypre_BoomerAMGSetCoarsenSymmetricStrength( (void *) solver,
+                                                        coarsen_symmetric_strength ) );
+}
+
 /*--------------------------------------------------------------------------
  * HYPRE_BoomerAMGSetMaxRowSum, HYPRE_BoomerAMGGetMaxRowSum
  *--------------------------------------------------------------------------*/

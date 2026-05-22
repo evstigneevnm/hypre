@@ -61,6 +61,7 @@ typedef struct
    HYPRE_Int      redundant;
    HYPRE_Int      participate;
    HYPRE_Int      Sabs;
+   HYPRE_Int      coarsen_symmetric_strength;
 
    /* solve params */
    HYPRE_Int      max_iter;
@@ -294,6 +295,7 @@ typedef struct
 #define hypre_ParAMGDataStrongThresholdR(amg_data)     ((amg_data) -> strong_thresholdR)
 #define hypre_ParAMGDataFilterThresholdR(amg_data)     ((amg_data) -> filter_thresholdR)
 #define hypre_ParAMGDataSabs(amg_data)                 ((amg_data) -> Sabs)
+#define hypre_ParAMGDataCoarsenSymmetricStrength(amg_data) ((amg_data) -> coarsen_symmetric_strength)
 #define hypre_ParAMGDataMaxRowSum(amg_data)            ((amg_data) -> max_row_sum)
 #define hypre_ParAMGDataTruncFactor(amg_data)          ((amg_data) -> trunc_factor)
 #define hypre_ParAMGDataAggTruncFactor(amg_data)       ((amg_data) -> agg_trunc_factor)

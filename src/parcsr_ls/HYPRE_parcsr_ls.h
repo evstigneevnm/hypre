@@ -1426,7 +1426,15 @@ HYPRE_Int HYPRE_BoomerAMGSetIsolatedFPoints(HYPRE_Solver  solver,
  * on the absolute value of the matrix coefficients
  **/
 HYPRE_Int HYPRE_BoomerAMGSetSabs (HYPRE_Solver solver,
-                                  HYPRE_Int Sabs );
+                                   HYPRE_Int Sabs );
+
+/**
+ * (Optional) if coarsen_symmetric_strength equals 1, BoomerAMG uses
+ * S union S^T only for C/F coarsening. Interpolation and Galerkin RAP
+ * still use the original strength graph and operator.
+ **/
+HYPRE_Int HYPRE_BoomerAMGSetCoarsenSymmetricStrength (HYPRE_Solver solver,
+                                                      HYPRE_Int coarsen_symmetric_strength );
 
 /**@}*/
 
