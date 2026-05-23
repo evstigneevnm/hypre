@@ -36,6 +36,89 @@ hypre_BoomerAMGSetupDebugShouldPrint( HYPRE_Int debug_level,
    return (debug_level > 1) || (debug_level == 1 && my_id == 0);
 }
 
+static HYPRE_Int
+hypre_BoomerAMGFingerprintLevel( void )
+{
+   const char *env = getenv("HYPRE_BAMG_FINGERPRINT");
+
+   if (!env || !env[0])
+   {
+      return 0;
+   }
+
+   return hypre_max(atoi(env), 0);
+}
+
+static void
+hypre_BoomerAMGPrintMatrixFingerprint( const char         *label,
+                                       HYPRE_Int           level,
+                                       hypre_ParCSRMatrix *A,
+                                       HYPRE_Int           fingerprint_level,
+                                       HYPRE_Int           my_id )
+{
+   if (!A || !hypre_BoomerAMGSetupDebugShouldPrint(fingerprint_level, my_id))
+   {
+      return;
+   }
+
+   hypre_CSRMatrix *diag = hypre_ParCSRMatrixDiag(A);
+   hypre_CSRMatrix *offd = hypre_ParCSRMatrixOffd(A);
+   HYPRE_Int local_rows = diag ? hypre_CSRMatrixNumRows(diag) : 0;
+   HYPRE_Int diag_nnz = diag ? hypre_CSRMatrixNumNonzeros(diag) : 0;
+   HYPRE_Int offd_nnz = offd ? hypre_CSRMatrixNumNonzeros(offd) : 0;
+   HYPRE_Int offd_cols = offd ? hypre_CSRMatrixNumCols(offd) : 0;
+
+   if (hypre_ParCSRMatrixDNumNonzeros(A) == 0.0)
+   {
+      hypre_ParCSRMatrixSetDNumNonzeros(A);
+   }
+
+   hypre_printf("[HYPRE_BAMG_FINGERPRINT rank %d] level %d %s: global_rows=%b local_rows=%d global_nnz=%e diag_nnz=%d offd_nnz=%d offd_cols=%d mem=%d\n",
+                my_id, level, label,
+                hypre_ParCSRMatrixGlobalNumRows(A), local_rows,
+                hypre_ParCSRMatrixDNumNonzeros(A), diag_nnz, offd_nnz,
+                offd_cols, hypre_ParCSRMatrixMemoryLocation(A));
+   fflush(NULL);
+}
+
+static void
+hypre_BoomerAMGPrintCFFingerprint( const char     *label,
+                                   HYPRE_Int       level,
+                                   hypre_IntArray *CF_marker,
+                                   MPI_Comm        comm,
+                                   HYPRE_Int       fingerprint_level,
+                                   HYPRE_Int       my_id )
+{
+   HYPRE_Int local_c = 0, local_f = 0, local_sf = 0, local_zero = 0;
+   HYPRE_BigInt in[5], out[5];
+
+   if (!CF_marker || fingerprint_level <= 0)
+   {
+      return;
+   }
+
+   hypre_IntArrayCount(CF_marker,  1, &local_c);
+   hypre_IntArrayCount(CF_marker, -1, &local_f);
+   hypre_IntArrayCount(CF_marker, -3, &local_sf);
+   hypre_IntArrayCount(CF_marker,  0, &local_zero);
+
+   in[0] = (HYPRE_BigInt) local_c;
+   in[1] = (HYPRE_BigInt) local_f;
+   in[2] = (HYPRE_BigInt) local_sf;
+   in[3] = (HYPRE_BigInt) local_zero;
+   in[4] = (HYPRE_BigInt) hypre_IntArraySize(CF_marker);
+   hypre_MPI_Allreduce(in, out, 5, HYPRE_MPI_BIG_INT, hypre_MPI_SUM, comm);
+
+   if (hypre_BoomerAMGSetupDebugShouldPrint(fingerprint_level, my_id))
+   {
+      hypre_printf("[HYPRE_BAMG_FINGERPRINT rank %d] level %d %s: local(C=%d F=%d SF=%d zero=%d total=%d) global(C=%b F=%b SF=%b zero=%b total=%b)\n",
+                   my_id, level, label, local_c, local_f, local_sf,
+                   local_zero, hypre_IntArraySize(CF_marker),
+                   out[0], out[1], out[2], out[3], out[4]);
+      fflush(NULL);
+   }
+}
+
 /*****************************************************************************
  *
  * Routine for driving the setup phase of AMG
@@ -249,6 +332,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    HYPRE_Real      wall_time;   /* for debugging instrumentation */
    HYPRE_Int       setup_debug_level = 0;
    HYPRE_Int       setup_debug_print = 0;
+   HYPRE_Int       fingerprint_level = 0;
    HYPRE_Real      setup_debug_start_time = 0.0;
    HYPRE_Real      setup_debug_phase_time = 0.0;
    HYPRE_Int       add_end;
@@ -337,6 +421,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
 
    setup_debug_level = hypre_BoomerAMGSetupDebugLevel();
    setup_debug_print = hypre_BoomerAMGSetupDebugShouldPrint(setup_debug_level, my_id);
+   fingerprint_level = hypre_BoomerAMGFingerprintLevel();
    if (setup_debug_print)
    {
       setup_debug_start_time = time_getWallclockSeconds();
@@ -347,6 +432,7 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
                    grid_relax_type[3], coarse_threshold, min_coarse_size,
                    hypre_ParAMGDataStrongThreshold(amg_data));
    }
+   hypre_BoomerAMGPrintMatrixFingerprint("A[0]", 0, A, fingerprint_level, my_id);
 
    /* set size of dof_func hypre_IntArray if necessary */
    if (dof_func && hypre_IntArraySize(dof_func) < 0)
@@ -1226,6 +1312,9 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
             hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d strength matrix done: %.6f s\n",
                          my_id, level, time_getWallclockSeconds() - setup_debug_phase_time);
          }
+         hypre_BoomerAMGPrintMatrixFingerprint("S", level, S, fingerprint_level, my_id);
+         hypre_BoomerAMGPrintMatrixFingerprint("S_coarsen", level, S_coarsen,
+                                               fingerprint_level, my_id);
 
          /* Allocate CF_marker for the current level */
          CF_marker_array[level] = hypre_IntArrayCreate(local_num_vars);
@@ -1826,6 +1915,8 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
                             time_getWallclockSeconds() - setup_debug_phase_time);
             }
          }
+         hypre_BoomerAMGPrintCFFingerprint("CF", level, CF_marker_array[level],
+                                            comm, fingerprint_level, my_id);
 
          /*****xxxxxxxxxxxxx changes for min_coarse_size  end */
          HYPRE_ANNOTATE_REGION_END("%s", "Coarsening");
@@ -3073,6 +3164,8 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
          hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d interpolation done: %.6f s\n",
                       my_id, level, time_getWallclockSeconds() - setup_debug_phase_time);
       }
+      hypre_BoomerAMGPrintMatrixFingerprint("P", level, P_array[level],
+                                            fingerprint_level, my_id);
 
       /*-------------------------------------------------------------
        * Build coarse-grid operator, A_array[level+1] by R*A*P
@@ -3233,6 +3326,8 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
                       hypre_ParCSRMatrixDNumNonzeros(A_H),
                       time_getWallclockSeconds() - setup_debug_phase_time);
       }
+      hypre_BoomerAMGPrintMatrixFingerprint("A_H", level + 1, A_H,
+                                            fingerprint_level, my_id);
 
       HYPRE_ANNOTATE_MGLEVEL_END(level);
       hypre_GpuProfilingPopRange();

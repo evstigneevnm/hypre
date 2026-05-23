@@ -44,6 +44,19 @@ hypre_BoomerAMGCoarsenDebugPrint( HYPRE_Int my_id,
    fflush(NULL);
 }
 
+static HYPRE_Int
+hypre_BoomerAMGPMISHostDeviceLike( void )
+{
+   const char *env = getenv("HYPRE_PMIS_HOST_DEVICE_LIKE");
+
+   if (!env || !env[0])
+   {
+      env = getenv("HYPRE_BAMG_PMIS_HOST_DEVICE_LIKE");
+   }
+
+   return env && env[0] && atoi(env) != 0;
+}
+
 /*==========================================================================*/
 /*==========================================================================*/
 /**
@@ -2263,6 +2276,8 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
    HYPRE_Int                 setup_debug_level = 0;
    HYPRE_Int                 setup_debug_print = 0;
    HYPRE_Int                 setup_debug_iter_print = 0;
+   HYPRE_Int                 device_like_pmis = 0;
+   HYPRE_Int                 offd_temp_mark = 9999;
    HYPRE_Real                setup_debug_start_time = 0.0;
    HYPRE_Real                setup_debug_phase_time = 0.0;
 
@@ -2304,6 +2319,7 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
    hypre_MPI_Comm_rank(comm, &my_id);
    setup_debug_level = hypre_BoomerAMGSetupDebugLevel();
    setup_debug_print = hypre_BoomerAMGSetupDebugShouldPrint(setup_debug_level, my_id);
+   device_like_pmis = hypre_BoomerAMGPMISHostDeviceLike() && CF_init != 1;
    if (setup_debug_print)
    {
       setup_debug_start_time = time_getWallclockSeconds();
@@ -2338,11 +2354,11 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
 
    if (setup_debug_print)
    {
-      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost enter: rows=%d diag_nnz=%d offd_nnz=%d offd_cols=%d sends=%d send_map=%d CF_init=%d threads=%d\n",
+      hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost enter: rows=%d diag_nnz=%d offd_nnz=%d offd_cols=%d sends=%d send_map=%d CF_init=%d threads=%d device_like=%d\n",
                    my_id, num_variables, hypre_CSRMatrixNumNonzeros(S_diag),
                    hypre_CSRMatrixNumNonzeros(S_offd), num_cols_offd, num_sends,
                    hypre_ParCSRCommPkgSendMapStart(comm_pkg, num_sends), CF_init,
-                   hypre_NumThreads());
+                   hypre_NumThreads(), device_like_pmis);
       fflush(NULL);
    }
 
@@ -2498,7 +2514,7 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
     *---------------------------------------------------*/
 
    /* first the off-diagonal part of the graph array */
-   if (num_cols_offd)
+   if (num_cols_offd && !device_like_pmis)
    {
       graph_array_offd = hypre_CTAlloc(HYPRE_Int, num_cols_offd, HYPRE_MEMORY_HOST);
    }
@@ -2507,12 +2523,12 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
       graph_array_offd = NULL;
    }
 
-   for (ig = 0; ig < num_cols_offd; ig++)
+   for (ig = 0; ig < (device_like_pmis ? 0 : num_cols_offd); ig++)
    {
       graph_array_offd[ig] = ig;
    }
 
-   graph_offd_size = num_cols_offd;
+   graph_offd_size = device_like_pmis ? 0 : num_cols_offd;
 
    /* now the local part of the graph array, and the local CF_marker array */
    graph_array = hypre_CTAlloc(HYPRE_Int, num_variables, HYPRE_MEMORY_HOST);
@@ -2573,6 +2589,11 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
             {
                CF_marker[i] = C_PT;
             }
+            measure_array[i] = 0;
+         }
+         else if (device_like_pmis && measure_array[i] < 1.0)
+         {
+            CF_marker[i] = F_PT;
             measure_array[i] = 0;
          }
          else
@@ -2647,7 +2668,7 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
    /* graph_array2 */
    HYPRE_Int *graph_array2 = hypre_CTAlloc(HYPRE_Int, num_variables, HYPRE_MEMORY_HOST);
    HYPRE_Int *graph_array_offd2 = NULL;
-   if (num_cols_offd)
+   if (num_cols_offd && !device_like_pmis)
    {
       graph_array_offd2 = hypre_CTAlloc(HYPRE_Int,  num_cols_offd, HYPRE_MEMORY_HOST);
    }
@@ -2747,7 +2768,7 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
          for (ig = 0; ig < graph_size; ig++)
          {
             i = graph_array[ig];
-            if (measure_array[i] > 1)
+            if (device_like_pmis || measure_array[i] > 1)
             {
                CF_marker[i] = 1;
             }
@@ -2756,10 +2777,14 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
 #ifdef HYPRE_USING_OPENMP
          #pragma omp parallel for private(ig, i) HYPRE_SMP_SCHEDULE
 #endif
-         for (ig = 0; ig < graph_offd_size; ig++)
+         for (ig = 0; ig < (device_like_pmis ? num_cols_offd : graph_offd_size); ig++)
          {
-            i = graph_array_offd[ig];
-            if (measure_array[i + num_variables] > 1)
+            i = device_like_pmis ? ig : graph_array_offd[ig];
+            if (device_like_pmis)
+            {
+               CF_marker_offd[i] = 0;
+            }
+            else if (measure_array[i + num_variables] > 1)
             {
                CF_marker_offd[i] = 1;
             }
@@ -2785,7 +2810,7 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
          {
             i = graph_array[ig];
 
-            if (measure_array[i] > 1)
+            if (device_like_pmis || measure_array[i] > 1)
             {
                /* for each local neighbor j of i */
                for (jS = S_diag_i[i]; jS < S_diag_i[i + 1]; jS++)
@@ -2813,7 +2838,7 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
                   {
                      if (measure_array[i] > measure_array[j])
                      {
-                        CF_marker_offd[jj] = 0;
+                        CF_marker_offd[jj] = device_like_pmis ? offd_temp_mark : 0;
                      }
                      else if (measure_array[j] > measure_array[i])
                      {
@@ -2859,7 +2884,20 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
             for (j = start; j < hypre_ParCSRCommPkgSendMapStart(comm_pkg, i + 1); j++)
             {
                elmt = hypre_ParCSRCommPkgSendMapElmt(comm_pkg, j);
-               if (!int_buf_data[index] && CF_marker[elmt] > 0)
+               if (device_like_pmis && int_buf_data[index] == offd_temp_mark)
+               {
+                  /* Only active graph points should be removed from the current
+                   * independent-set candidates.  Finalized C/F points have
+                   * measure zero; resetting them to zero leaves undecided
+                   * markers after PMIS and can crash interpolation.
+                   */
+                  if (measure_array[elmt] > 0.0)
+                  {
+                     CF_marker[elmt] = 0;
+                  }
+                  int_buf_data[index++] = CF_marker[elmt];
+               }
+               else if (!device_like_pmis && !int_buf_data[index] && CF_marker[elmt] > 0)
                {
                   CF_marker[elmt] = 0;
                   index++;
@@ -2922,7 +2960,7 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
           * any other point)
           *---------------------------------------------*/
 
-         if (measure_array[i] < 1)
+         if (!device_like_pmis && measure_array[i] < 1)
          {
             CF_marker[i] = F_PT;
          }
@@ -3001,7 +3039,43 @@ hypre_BoomerAMGCoarsenPMISHost( hypre_ParCSRMatrix    *S,
          hypre_ParCSRCommHandleDestroy(comm_handle);
          if (setup_debug_iter_print)
          {
-            hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost CF sync done",
+             hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost CF sync done",
+                                              time_getWallclockSeconds() - setup_debug_phase_time);
+         }
+      }
+
+      /* The GPU PMIS path communicates updated measure values after C/F
+       * assignment.  This is essential for the device-like host path because
+       * off-rank points that became C/F have measure zero and must not keep
+       * suppressing local independent-set candidates in later iterations.
+       */
+      if (device_like_pmis && num_procs > 1)
+      {
+         if (setup_debug_iter_print)
+         {
+            setup_debug_phase_time = time_getWallclockSeconds();
+            hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] PMISHost iter %d measure sync begin\n",
+                         my_id, iter - 1);
+            fflush(NULL);
+         }
+
+         index = 0;
+         for (i = 0; i < num_sends; i++)
+         {
+            start = hypre_ParCSRCommPkgSendMapStart(comm_pkg, i);
+            for (j = start; j < hypre_ParCSRCommPkgSendMapStart(comm_pkg, i + 1); j++)
+            {
+               buf_data[index++] = measure_array[hypre_ParCSRCommPkgSendMapElmt(comm_pkg, j)];
+            }
+         }
+
+         comm_handle = hypre_ParCSRCommHandleCreate(1, comm_pkg, buf_data,
+                                                    &measure_array[num_variables]);
+         hypre_ParCSRCommHandleDestroy(comm_handle);
+
+         if (setup_debug_iter_print)
+         {
+            hypre_BoomerAMGCoarsenDebugPrint(my_id, "PMISHost measure sync done",
                                              time_getWallclockSeconds() - setup_debug_phase_time);
          }
       }
