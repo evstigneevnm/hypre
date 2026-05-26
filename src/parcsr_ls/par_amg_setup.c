@@ -17,6 +17,22 @@
 #define DEBUG_SAVE_ALL_OPS 0
 
 static HYPRE_Int
+hypre_BoomerAMGBuildPressureGaugeLevel( hypre_ParAMGData    *amg_data,
+                                        HYPRE_Int             fine_level,
+                                        hypre_ParCSRMatrix   *interpolation )
+{
+   HYPRE_PressureGaugeData *gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+
+   if (!gauge_data || !gauge_data->build_level || !interpolation)
+   {
+      return 0;
+   }
+
+   return gauge_data->build_level(gauge_data->context, fine_level,
+                                  (HYPRE_ParCSRMatrix) interpolation);
+}
+
+static HYPRE_Int
 hypre_BoomerAMGSetupDebugLevel( void )
 {
    const char *env = getenv("HYPRE_BAMG_SETUP_DEBUG");
@@ -3164,6 +3180,11 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
          hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] level %d interpolation done: %.6f s\n",
                       my_id, level, time_getWallclockSeconds() - setup_debug_phase_time);
       }
+      if (hypre_BoomerAMGBuildPressureGaugeLevel(amg_data, level, P_array[level]))
+      {
+         return hypre_error_flag;
+      }
+
       hypre_BoomerAMGPrintMatrixFingerprint("P", level, P_array[level],
                                             fingerprint_level, my_id);
 
