@@ -63,11 +63,18 @@ typedef HYPRE_Int (*HYPRE_PressureGaugeBuildLevelFcn)(void *context,
                                                       HYPRE_Int fine_level,
                                                       HYPRE_ParCSRMatrix interpolation);
 
+typedef HYPRE_Int (*HYPRE_PressureGaugeCoarseSolveFcn)(void *context,
+                                                       HYPRE_Int level,
+                                                       HYPRE_ParCSRMatrix matrix,
+                                                       HYPRE_ParVector rhs,
+                                                       HYPRE_ParVector solution);
+
 typedef struct HYPRE_PressureGaugeData_struct
 {
    void                              *context;
    HYPRE_PressureGaugeProjectFcn      project_vector;
    HYPRE_PressureGaugeBuildLevelFcn   build_level;
+   HYPRE_PressureGaugeCoarseSolveFcn  coarse_solve;
 } HYPRE_PressureGaugeData;
 
 #ifndef HYPRE_MODIFYPC

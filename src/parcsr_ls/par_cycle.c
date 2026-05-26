@@ -30,6 +30,37 @@ hypre_BoomerAMGProjectPressureGaugeVector( hypre_ParAMGData *amg_data,
    return gauge_data->project_vector(gauge_data->context, level, (HYPRE_ParVector) vector);
 }
 
+static HYPRE_Int
+hypre_BoomerAMGPressureGaugeCoarseSolve( hypre_ParAMGData    *amg_data,
+                                         HYPRE_Int             level,
+                                         hypre_ParCSRMatrix   *matrix,
+                                         hypre_ParVector      *rhs,
+                                         hypre_ParVector      *solution,
+                                         HYPRE_Int            *used )
+{
+   HYPRE_PressureGaugeData *gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+
+   if (used)
+   {
+      *used = 0;
+   }
+
+   if (!gauge_data || !gauge_data->coarse_solve || !matrix || !rhs || !solution)
+   {
+      return 0;
+   }
+
+   if (used)
+   {
+      *used = 1;
+   }
+
+   return gauge_data->coarse_solve(gauge_data->context, level,
+                                   (HYPRE_ParCSRMatrix) matrix,
+                                   (HYPRE_ParVector) rhs,
+                                   (HYPRE_ParVector) solution);
+}
+
 /*--------------------------------------------------------------------------
  * hypre_BoomerAMGCycle
  *--------------------------------------------------------------------------*/
@@ -515,8 +546,21 @@ hypre_BoomerAMGCycle( void              *amg_vdata,
                else if (relax_type == 9 || relax_type == 99 || relax_type == 199)
                {
                   /* Gaussian elimination */
+                  HYPRE_Int pressure_gauge_coarse_solve_used = 0;
                   hypre_BoomerAMGProjectPressureGaugeVector(amg_data, level, Aux_F);
-                  hypre_GaussElimSolve(amg_data, level, relax_type);
+                  Solve_err_flag = hypre_BoomerAMGPressureGaugeCoarseSolve(amg_data, level,
+                                                                            A_array[level],
+                                                                            Aux_F,
+                                                                            Aux_U,
+                                                                            &pressure_gauge_coarse_solve_used);
+                  if (Solve_err_flag)
+                  {
+                     return Solve_err_flag;
+                  }
+                  if (!pressure_gauge_coarse_solve_used)
+                  {
+                     Solve_err_flag = hypre_GaussElimSolve(amg_data, level, relax_type);
+                  }
                   hypre_BoomerAMGProjectPressureGaugeVector(amg_data, level, Aux_U);
                }
                else if (relax_type == 18)
