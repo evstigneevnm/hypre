@@ -125,6 +125,17 @@ HYPRE_BoomerAMGSolveT( HYPRE_Solver solver,
 }
 
 /*--------------------------------------------------------------------------
+ * HYPRE_BoomerAMGSetPressureGaugeData
+ *--------------------------------------------------------------------------*/
+
+HYPRE_Int
+HYPRE_BoomerAMGSetPressureGaugeData( HYPRE_Solver             solver,
+                                     HYPRE_PressureGaugeData *gauge_data )
+{
+   return ( hypre_BoomerAMGSetPressureGaugeData( (void *) solver, gauge_data ) );
+}
+
+/*--------------------------------------------------------------------------
  * HYPRE_BoomerAMGSetRestriction
  *--------------------------------------------------------------------------*/
 

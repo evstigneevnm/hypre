@@ -15,6 +15,21 @@
 #include "par_amg.h"
 #include "../parcsr_block_mv/par_csr_block_matrix.h"
 
+static HYPRE_Int
+hypre_BoomerAMGProjectPressureGaugeVector( hypre_ParAMGData *amg_data,
+                                           HYPRE_Int          level,
+                                           hypre_ParVector   *vector )
+{
+   HYPRE_PressureGaugeData *gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+
+   if (!gauge_data || !gauge_data->project_vector || !vector)
+   {
+      return 0;
+   }
+
+   return gauge_data->project_vector(gauge_data->context, level, (HYPRE_ParVector) vector);
+}
+
 /*--------------------------------------------------------------------------
  * hypre_BoomerAMGCycle
  *--------------------------------------------------------------------------*/
@@ -277,6 +292,9 @@ hypre_BoomerAMGCycle( void              *amg_vdata,
       }
    }
 
+   hypre_BoomerAMGProjectPressureGaugeVector(amg_data, 0, F_array[0]);
+   hypre_BoomerAMGProjectPressureGaugeVector(amg_data, 0, U_array[0]);
+
    /*---------------------------------------------------------------------
     * Main loop of cycling
     *--------------------------------------------------------------------*/
@@ -364,7 +382,9 @@ hypre_BoomerAMGCycle( void              *amg_vdata,
       {
          HYPRE_ANNOTATE_REGION_BEGIN("%s", "Coarse solve");
          hypre_GpuProfilingPushRange("Coarse solve");
+         hypre_BoomerAMGProjectPressureGaugeVector(amg_data, level, F_array[level]);
          hypre_seqAMGCycle(amg_data, level, F_array, U_array);
+         hypre_BoomerAMGProjectPressureGaugeVector(amg_data, level, U_array[level]);
          HYPRE_ANNOTATE_REGION_END("%s", "Coarse solve");
          hypre_GpuProfilingPopRange();
       }
@@ -373,7 +393,9 @@ hypre_BoomerAMGCycle( void              *amg_vdata,
       {
          HYPRE_ANNOTATE_REGION_BEGIN("%s", "Coarse solve");
          hypre_GpuProfilingPushRange("Coarse solve");
+         hypre_BoomerAMGProjectPressureGaugeVector(amg_data, level, Aux_F);
          hypre_SLUDistSolve(hypre_ParAMGDataDSLUSolver(amg_data), Aux_F, Aux_U);
+         hypre_BoomerAMGProjectPressureGaugeVector(amg_data, level, Aux_U);
          HYPRE_ANNOTATE_REGION_END("%s", "Coarse solve");
          hypre_GpuProfilingPopRange();
       }
@@ -493,7 +515,9 @@ hypre_BoomerAMGCycle( void              *amg_vdata,
                else if (relax_type == 9 || relax_type == 99 || relax_type == 199)
                {
                   /* Gaussian elimination */
+                  hypre_BoomerAMGProjectPressureGaugeVector(amg_data, level, Aux_F);
                   hypre_GaussElimSolve(amg_data, level, relax_type);
+                  hypre_BoomerAMGProjectPressureGaugeVector(amg_data, level, Aux_U);
                }
                else if (relax_type == 18)
                {
@@ -608,6 +632,8 @@ hypre_BoomerAMGCycle( void              *amg_vdata,
                }
             } /* for (j = 0; j < num_sweep; j++) */
 
+            hypre_BoomerAMGProjectPressureGaugeVector(amg_data, level, Aux_U);
+
             if  (smooth_num_levels > level && smooth_type > 9)
             {
                gammaold = gamma;
@@ -701,6 +727,8 @@ hypre_BoomerAMGCycle( void              *amg_vdata,
                                          beta, F_array[coarse_grid]);
             }
          }
+         hypre_BoomerAMGProjectPressureGaugeVector(amg_data, coarse_grid, F_array[coarse_grid]);
+
          HYPRE_ANNOTATE_REGION_END("%s", "Restriction");
          HYPRE_ANNOTATE_MGLEVEL_END(level);
          hypre_GpuProfilingPopRange();
@@ -750,6 +778,7 @@ hypre_BoomerAMGCycle( void              *amg_vdata,
             /* printf("Proc %d: level %d, n %d, Interpolation done\n", my_id, level, local_size); */
          }
 
+         hypre_BoomerAMGProjectPressureGaugeVector(amg_data, fine_grid, U_array[fine_grid]);
          hypre_ParVectorAllZeros(U_array[fine_grid]) = 0;
 
          HYPRE_ANNOTATE_REGION_END("%s", "Interpolation");

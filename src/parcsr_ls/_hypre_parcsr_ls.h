@@ -275,6 +275,9 @@ typedef struct
    HYPRE_Int keepTranspose;
    HYPRE_Int modularized_matmat;
 
+   /* Optional SPSFD pressure-gauge projection hook. Borrowed pointer. */
+   HYPRE_PressureGaugeData *pressure_gauge_data;
+
    /* information for preserving indices as coarse grid points */
    HYPRE_Int      num_C_points;
    HYPRE_Int      C_points_coarse_level;
@@ -539,6 +542,7 @@ typedef struct
 #define hypre_ParAMGDataRAP2(amg_data) ((amg_data)->rap2)
 #define hypre_ParAMGDataKeepTranspose(amg_data) ((amg_data)->keepTranspose)
 #define hypre_ParAMGDataModularizedMatMat(amg_data) ((amg_data)->modularized_matmat)
+#define hypre_ParAMGDataPressureGaugeData(amg_data) ((amg_data)->pressure_gauge_data)
 
 /*indices for the dof which will keep coarsening to the coarse level */
 #define hypre_ParAMGDataNumCPoints(amg_data)  ((amg_data)->num_C_points)
@@ -1799,6 +1803,7 @@ HYPRE_Int HYPRE_BoomerAMGSolve ( HYPRE_Solver solver, HYPRE_ParCSRMatrix A, HYPR
                                  HYPRE_ParVector x );
 HYPRE_Int HYPRE_BoomerAMGSolveT ( HYPRE_Solver solver, HYPRE_ParCSRMatrix A, HYPRE_ParVector b,
                                   HYPRE_ParVector x );
+HYPRE_Int HYPRE_BoomerAMGSetPressureGaugeData ( HYPRE_Solver solver, HYPRE_PressureGaugeData *gauge_data );
 HYPRE_Int HYPRE_BoomerAMGSetRestriction ( HYPRE_Solver solver, HYPRE_Int restr_par );
 HYPRE_Int HYPRE_BoomerAMGSetIsTriangular ( HYPRE_Solver solver, HYPRE_Int is_triangular );
 HYPRE_Int HYPRE_BoomerAMGSetGMRESSwitchR ( HYPRE_Solver solver, HYPRE_Int gmres_switch );
@@ -2426,6 +2431,7 @@ HYPRE_Int hypre_CreateDinv ( void *amg_vdata );
 /* par_amg.c */
 void *hypre_BoomerAMGCreate ( void );
 HYPRE_Int hypre_BoomerAMGDestroy ( void *data );
+HYPRE_Int hypre_BoomerAMGSetPressureGaugeData ( void *data, HYPRE_PressureGaugeData *gauge_data );
 HYPRE_Int hypre_BoomerAMGSetRestriction ( void *data, HYPRE_Int restr_par );
 HYPRE_Int hypre_BoomerAMGSetIsTriangular ( void *data, HYPRE_Int is_triangular );
 HYPRE_Int hypre_BoomerAMGSetGMRESSwitchR ( void *data, HYPRE_Int gmres_switch );

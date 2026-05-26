@@ -527,6 +527,7 @@ hypre_BoomerAMGCreate( void )
    hypre_ParAMGDataRAP2(amg_data)              = rap2;
    hypre_ParAMGDataKeepTranspose(amg_data)     = keepT;
    hypre_ParAMGDataModularizedMatMat(amg_data) = modu_rap;
+   hypre_ParAMGDataPressureGaugeData(amg_data) = NULL;
 
    /* information for preserving indices as coarse grid points */
    hypre_ParAMGDataCPointsMarker(amg_data)      = NULL;
@@ -548,6 +549,26 @@ hypre_BoomerAMGCreate( void )
    HYPRE_ANNOTATE_FUNC_END;
 
    return (void *) amg_data;
+}
+
+/*--------------------------------------------------------------------------
+ * hypre_BoomerAMGSetPressureGaugeData
+ *--------------------------------------------------------------------------*/
+
+HYPRE_Int
+hypre_BoomerAMGSetPressureGaugeData( void *data, HYPRE_PressureGaugeData *gauge_data )
+{
+   hypre_ParAMGData *amg_data = (hypre_ParAMGData *) data;
+
+   if (!amg_data)
+   {
+      hypre_error_in_arg(1);
+      return hypre_error_flag;
+   }
+
+   hypre_ParAMGDataPressureGaugeData(amg_data) = gauge_data;
+
+   return hypre_error_flag;
 }
 
 /*--------------------------------------------------------------------------

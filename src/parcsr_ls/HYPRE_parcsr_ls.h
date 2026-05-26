@@ -55,6 +55,16 @@ typedef HYPRE_Int (*HYPRE_PtrToParSolverFcn)(HYPRE_Solver,
                                              HYPRE_ParVector,
                                              HYPRE_ParVector);
 
+typedef HYPRE_Int (*HYPRE_PressureGaugeProjectFcn)(void *context,
+                                                   HYPRE_Int level,
+                                                   HYPRE_ParVector vector);
+
+typedef struct HYPRE_PressureGaugeData_struct
+{
+   void                         *context;
+   HYPRE_PressureGaugeProjectFcn project_vector;
+} HYPRE_PressureGaugeData;
+
 #ifndef HYPRE_MODIFYPC
 #define HYPRE_MODIFYPC
 typedef HYPRE_Int (*HYPRE_PtrToModifyPCFcn)(HYPRE_Solver,
@@ -133,6 +143,13 @@ HYPRE_Int HYPRE_BoomerAMGSolveT(HYPRE_Solver       solver,
                                 HYPRE_ParCSRMatrix A,
                                 HYPRE_ParVector    b,
                                 HYPRE_ParVector    x);
+
+/**
+ * Optional SPSFD pressure-gauge projection hook. BoomerAMG does not own
+ * the pointed data; pass NULL to disable the hook.
+ **/
+HYPRE_Int HYPRE_BoomerAMGSetPressureGaugeData(HYPRE_Solver             solver,
+                                              HYPRE_PressureGaugeData *gauge_data);
 
 /**
  * Recovers old default for coarsening and interpolation, i.e Falgout
