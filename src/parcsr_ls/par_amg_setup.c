@@ -33,6 +33,47 @@ hypre_BoomerAMGBuildPressureGaugeLevel( hypre_ParAMGData    *amg_data,
 }
 
 static HYPRE_Int
+hypre_BoomerAMGSanitizePressureGaugeL1Norms( hypre_ParAMGData *amg_data,
+                                            HYPRE_Int          level,
+                                            HYPRE_Real        *l1_norm_data,
+                                            HYPRE_Int          num_rows,
+                                            HYPRE_Int          my_id,
+                                            HYPRE_MemoryLocation memory_location )
+{
+   HYPRE_PressureGaugeData *gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+   HYPRE_Int zeros = 0;
+   HYPRE_Int i;
+
+   if (!gauge_data || !gauge_data->coarse_solve || !l1_norm_data ||
+       hypre_GetActualMemLocation(memory_location) != hypre_MEMORY_HOST)
+   {
+      return hypre_error_flag;
+   }
+
+   for (i = 0; i < num_rows; i++)
+   {
+      if (hypre_abs(l1_norm_data[i]) == 0.0)
+      {
+         l1_norm_data[i] = 1.0;
+         zeros++;
+      }
+   }
+
+   if (zeros)
+   {
+      hypre_printf("[HYPRE pressure gauge rank %d] sanitized %d zero L1 smoother norm(s) on level %d\n",
+                   my_id, zeros, level);
+      if (hypre_error_flag == (HYPRE_ERROR_ARG | (1 << 3)))
+      {
+         HYPRE_ClearAllErrors();
+      }
+   }
+
+   return hypre_error_flag;
+}
+
+
+static HYPRE_Int
 hypre_BoomerAMGSetupDebugLevel( void )
 {
    const char *env = getenv("HYPRE_BAMG_SETUP_DEBUG");
@@ -3406,6 +3447,14 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    }  /* end of coarsening loop: while (not_finished_coarsening) */
 
    HYPRE_ANNOTATE_REGION_BEGIN("%s", "Coarse solve");
+   {
+      HYPRE_PressureGaugeData *pressure_gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+      if (pressure_gauge_data && pressure_gauge_data->coarse_solve && hypre_error_flag)
+      {
+         hypre_printf("[HYPRE pressure gauge rank %d] setup error flag before coarse solve setup: %d\n",
+                      my_id, hypre_error_flag);
+      }
+   }
    if (setup_debug_print)
    {
       setup_debug_phase_time = time_getWallclockSeconds();
@@ -3465,6 +3514,14 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    {
       hypre_printf("[HYPRE_BAMG_SETUP_DEBUG rank %d] coarse solve setup done: %.6f s\n",
                    my_id, time_getWallclockSeconds() - setup_debug_phase_time);
+   }
+   {
+      HYPRE_PressureGaugeData *pressure_gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+      if (pressure_gauge_data && pressure_gauge_data->coarse_solve && hypre_error_flag)
+      {
+         hypre_printf("[HYPRE pressure gauge rank %d] setup error flag after coarse solve setup: %d\n",
+                      my_id, hypre_error_flag);
+      }
    }
    HYPRE_ANNOTATE_MGLEVEL_END(level);
    hypre_GpuProfilingPopRange();
@@ -3648,6 +3705,9 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
       if (l1_norm_data)
       {
          l1_norms[j] = hypre_SeqVectorCreate(hypre_ParCSRMatrixNumRows(A_array[j]));
+         hypre_BoomerAMGSanitizePressureGaugeL1Norms(amg_data, j, l1_norm_data,
+                                                   hypre_ParCSRMatrixNumRows(A_array[j]), my_id,
+                                                   hypre_ParCSRMatrixMemoryLocation(A_array[j]));
          hypre_VectorData(l1_norms[j]) = l1_norm_data;
          hypre_SeqVectorInitialize_v2(l1_norms[j], hypre_ParCSRMatrixMemoryLocation(A_array[j]));
       }
@@ -3675,6 +3735,9 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
          hypre_ParCSRComputeL1Norms(A_array[j], 1, NULL, &l1_norm_data);
 
          l1_norms[j] = hypre_SeqVectorCreate(hypre_ParCSRMatrixNumRows(A_array[j]));
+         hypre_BoomerAMGSanitizePressureGaugeL1Norms(amg_data, j, l1_norm_data,
+                                                   hypre_ParCSRMatrixNumRows(A_array[j]), my_id,
+                                                   hypre_ParCSRMatrixMemoryLocation(A_array[j]));
          hypre_VectorData(l1_norms[j]) = l1_norm_data;
          hypre_SeqVectorInitialize_v2(l1_norms[j], hypre_ParCSRMatrixMemoryLocation(A_array[j]));
 
@@ -3737,6 +3800,9 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
       if (l1_norm_data)
       {
          l1_norms[j] = hypre_SeqVectorCreate(hypre_ParCSRMatrixNumRows(A_array[j]));
+         hypre_BoomerAMGSanitizePressureGaugeL1Norms(amg_data, j, l1_norm_data,
+                                                   hypre_ParCSRMatrixNumRows(A_array[j]), my_id,
+                                                   hypre_ParCSRMatrixMemoryLocation(A_array[j]));
          hypre_VectorData(l1_norms[j]) = l1_norm_data;
          hypre_SeqVectorInitialize_v2(l1_norms[j], hypre_ParCSRMatrixMemoryLocation(A_array[j]));
       }
@@ -3777,6 +3843,9 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
          hypre_ParCSRComputeL1Norms(A_array[j], 5, NULL, &l1_norm_data);
 
          l1_norms[j] = hypre_SeqVectorCreate(hypre_ParCSRMatrixNumRows(A_array[j]));
+         hypre_BoomerAMGSanitizePressureGaugeL1Norms(amg_data, j, l1_norm_data,
+                                                   hypre_ParCSRMatrixNumRows(A_array[j]), my_id,
+                                                   hypre_ParCSRMatrixMemoryLocation(A_array[j]));
          hypre_VectorData(l1_norms[j]) = l1_norm_data;
          hypre_SeqVectorInitialize_v2(l1_norms[j], hypre_ParCSRMatrixMemoryLocation(A_array[j]));
       }
@@ -4076,6 +4145,15 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
       hypre_GpuProfilingPopRange();
    } /* end of levels loop */
 
+   {
+      HYPRE_PressureGaugeData *pressure_gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+      if (pressure_gauge_data && pressure_gauge_data->coarse_solve && hypre_error_flag)
+      {
+         hypre_printf("[HYPRE pressure gauge rank %d] setup error flag after relaxation setup: %d\n",
+                      my_id, hypre_error_flag);
+      }
+   }
+
    if (amg_logging > 1)
    {
       Residual_array = hypre_ParVectorCreate(hypre_ParCSRMatrixComm(A_array[0]),
@@ -4118,6 +4196,15 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    if (amg_print_level == 1 || amg_print_level == 3)
    {
       hypre_BoomerAMGSetupStats(amg_data, A);
+   }
+
+   {
+      HYPRE_PressureGaugeData *pressure_gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+      if (pressure_gauge_data && pressure_gauge_data->coarse_solve && hypre_error_flag)
+      {
+         hypre_printf("[HYPRE pressure gauge rank %d] setup error flag before final return: %d\n",
+                      my_id, hypre_error_flag);
+      }
    }
 
    if (setup_debug_print)
