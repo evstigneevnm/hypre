@@ -67,7 +67,8 @@ typedef HYPRE_Int (*HYPRE_PressureGaugeCoarseSolveFcn)(void *context,
                                                        HYPRE_Int level,
                                                        HYPRE_ParCSRMatrix matrix,
                                                        HYPRE_ParVector rhs,
-                                                       HYPRE_ParVector solution);
+                                                       HYPRE_ParVector solution,
+                                                       HYPRE_Int *used);
 
 typedef struct HYPRE_PressureGaugeData_struct
 {

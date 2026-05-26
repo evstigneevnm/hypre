@@ -50,15 +50,11 @@ hypre_BoomerAMGPressureGaugeCoarseSolve( hypre_ParAMGData    *amg_data,
       return 0;
    }
 
-   if (used)
-   {
-      *used = 1;
-   }
-
    return gauge_data->coarse_solve(gauge_data->context, level,
                                    (HYPRE_ParCSRMatrix) matrix,
                                    (HYPRE_ParVector) rhs,
-                                   (HYPRE_ParVector) solution);
+                                   (HYPRE_ParVector) solution,
+                                   used);
 }
 
 /*--------------------------------------------------------------------------
