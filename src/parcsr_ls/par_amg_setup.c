@@ -3436,7 +3436,16 @@ hypre_BoomerAMGSetup( void               *amg_vdata,
    {
       if (coarse_size <= coarse_threshold)
       {
-         hypre_GaussElimSetup(amg_data, level, grid_relax_type[3]);
+         HYPRE_PressureGaugeData *pressure_gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+         if (pressure_gauge_data && pressure_gauge_data->coarse_solve)
+         {
+            hypre_printf("[HYPRE pressure gauge rank %d] coarse solve setup skipped: constrained coarse solve is registered\n",
+                         my_id);
+         }
+         else
+         {
+            hypre_GaussElimSetup(amg_data, level, grid_relax_type[3]);
+         }
       }
       else
       {
