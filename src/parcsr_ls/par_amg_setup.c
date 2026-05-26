@@ -41,11 +41,39 @@ hypre_BoomerAMGSanitizePressureGaugeL1Norms( hypre_ParAMGData *amg_data,
                                             HYPRE_MemoryLocation memory_location )
 {
    HYPRE_PressureGaugeData *gauge_data = hypre_ParAMGDataPressureGaugeData(amg_data);
+   HYPRE_ExecutionPolicy exec = hypre_GetExecPolicy1(memory_location);
    HYPRE_Int zeros = 0;
    HYPRE_Int i;
 
-   if (!gauge_data || !gauge_data->coarse_solve || !l1_norm_data ||
-       hypre_GetActualMemLocation(memory_location) != hypre_MEMORY_HOST)
+   if (!gauge_data || !gauge_data->coarse_solve || !l1_norm_data)
+   {
+      return hypre_error_flag;
+   }
+
+#if defined(HYPRE_USING_GPU)
+   if (exec == HYPRE_EXEC_DEVICE)
+   {
+#if defined(HYPRE_USING_SYCL)
+      HYPRE_ONEDPL_CALL( std::replace_if, l1_norm_data, l1_norm_data + num_rows,
+                         [] (const auto & x) {return !x;}, 1.0 );
+#else
+      thrust::identity<HYPRE_Real> identity;
+      HYPRE_THRUST_CALL( replace_if, l1_norm_data, l1_norm_data + num_rows,
+                         thrust::not1(identity), 1.0 );
+#endif
+
+      if (hypre_error_flag == (HYPRE_ERROR_ARG | (1 << 3)))
+      {
+         hypre_printf("[HYPRE pressure gauge rank %d] sanitized device zero L1 smoother norm(s) on level %d\n",
+                      my_id, level);
+         HYPRE_ClearAllErrors();
+      }
+
+      return hypre_error_flag;
+   }
+#endif
+
+   if (hypre_GetActualMemLocation(memory_location) != hypre_MEMORY_HOST)
    {
       return hypre_error_flag;
    }
