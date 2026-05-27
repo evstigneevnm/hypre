@@ -9,6 +9,8 @@
 #include "_hypre_utilities.h"
 #include "_hypre_utilities.hpp"
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
  *      generic device functions (HYPRE_USING_GPU)
@@ -2945,6 +2947,20 @@ HYPRE_SetSYCLDevice(sycl::device user_device)
  * so this has no effect on the sycl implementation.
  *--------------------------------------------------------------------*/
 
+static HYPRE_Int
+hypre_SPSFDDeviceBindDebugEnabled(void)
+{
+   const char *env = getenv("SPSFD_DEVICE_BIND_DEBUG");
+   return env && env[0] && env[0] != '0';
+}
+
+static const char*
+hypre_SPSFDEnvOrNA(const char *name)
+{
+   const char *value = getenv(name);
+   return value && value[0] ? value : "n/a";
+}
+
 HYPRE_Int
 hypre_bind_device( HYPRE_Int myid,
                    HYPRE_Int nproc,
@@ -2969,10 +2985,91 @@ hypre_bind_device( HYPRE_Int myid,
 
    /* get number of devices on this node */
    hypre_GetDeviceCount(&nDevices);
+   if (nDevices <= 0)
+   {
+      if (hypre_SPSFDDeviceBindDebugEnabled())
+      {
+         fprintf(stderr,
+                 "[SPSFD_DEVICE_BIND_DEBUG HYPRE_BIND] rank=%lld/%lld local_rank=%lld/%lld "
+                 "visible_devices=%d selected_device=n/a active_device=n/a host=%s "
+                 "CUDA_VISIBLE_DEVICES=%s NVIDIA_VISIBLE_DEVICES=%s SLURM_PROCID=%s "
+                 "SLURM_LOCALID=%s SLURM_NODEID=%s PMI_RANK=%s PMIX_RANK=%s\n",
+                 (long long) myid, (long long) nproc, (long long) myNodeid,
+                 (long long) NodeSize, (int) nDevices,
+                 hypre_SPSFDEnvOrNA("HOSTNAME"),
+                 hypre_SPSFDEnvOrNA("CUDA_VISIBLE_DEVICES"),
+                 hypre_SPSFDEnvOrNA("NVIDIA_VISIBLE_DEVICES"),
+                 hypre_SPSFDEnvOrNA("SLURM_PROCID"),
+                 hypre_SPSFDEnvOrNA("SLURM_LOCALID"),
+                 hypre_SPSFDEnvOrNA("SLURM_NODEID"),
+                 hypre_SPSFDEnvOrNA("PMI_RANK"),
+                 hypre_SPSFDEnvOrNA("PMIX_RANK"));
+         fflush(stderr);
+      }
+      hypre_error_w_msg(HYPRE_ERROR_GENERIC, "ERROR: no visible GPU devices on this node\n");
+      return hypre_error_flag;
+   }
 
    /* set device */
    device_id = myNodeid % nDevices;
    hypre_SetDevice(device_id, NULL);
+
+   if (hypre_SPSFDDeviceBindDebugEnabled())
+   {
+      hypre_int active_device = -1;
+      char      pci_bus_id[64] = "n/a";
+      char      device_name[256] = "n/a";
+      size_t    free_mem = 0;
+      size_t    total_mem = 0;
+
+      hypre_GetDevice(&active_device);
+
+#if defined(HYPRE_USING_CUDA)
+      if (active_device >= 0)
+      {
+         cudaDeviceProp prop;
+         cudaError_t    prop_err = cudaGetDeviceProperties(&prop, active_device);
+         if (prop_err == cudaSuccess)
+         {
+            snprintf(device_name, sizeof(device_name), "%s", prop.name);
+         }
+
+         cudaError_t pci_err = cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), active_device);
+         if (pci_err != cudaSuccess)
+         {
+            snprintf(pci_bus_id, sizeof(pci_bus_id), "cuda_err_%d", (int) pci_err);
+         }
+
+         cudaError_t mem_err = cudaMemGetInfo(&free_mem, &total_mem);
+         if (mem_err != cudaSuccess)
+         {
+            free_mem = 0;
+            total_mem = 0;
+         }
+      }
+#endif
+
+      fprintf(stderr,
+              "[SPSFD_DEVICE_BIND_DEBUG HYPRE_BIND] rank=%lld/%lld local_rank=%lld/%lld "
+              "visible_devices=%d selected_device=%d active_device=%d pci=%s name=\"%s\" "
+              "free_MB=%.3f total_MB=%.3f host=%s CUDA_VISIBLE_DEVICES=%s "
+              "NVIDIA_VISIBLE_DEVICES=%s SLURM_PROCID=%s SLURM_LOCALID=%s "
+              "SLURM_NODEID=%s PMI_RANK=%s PMIX_RANK=%s\n",
+              (long long) myid, (long long) nproc, (long long) myNodeid,
+              (long long) NodeSize, (int) nDevices, (int) device_id,
+              (int) active_device, pci_bus_id, device_name,
+              ((double) free_mem) / (1024.0 * 1024.0),
+              ((double) total_mem) / (1024.0 * 1024.0),
+              hypre_SPSFDEnvOrNA("HOSTNAME"),
+              hypre_SPSFDEnvOrNA("CUDA_VISIBLE_DEVICES"),
+              hypre_SPSFDEnvOrNA("NVIDIA_VISIBLE_DEVICES"),
+              hypre_SPSFDEnvOrNA("SLURM_PROCID"),
+              hypre_SPSFDEnvOrNA("SLURM_LOCALID"),
+              hypre_SPSFDEnvOrNA("SLURM_NODEID"),
+              hypre_SPSFDEnvOrNA("PMI_RANK"),
+              hypre_SPSFDEnvOrNA("PMIX_RANK"));
+      fflush(stderr);
+   }
 
 #if defined(HYPRE_DEBUG) && defined(HYPRE_PRINT_ERRORS)
    hypre_printf("Proc [global %d/%d, local %d/%d] can see %d GPUs and is running on %d\n",
